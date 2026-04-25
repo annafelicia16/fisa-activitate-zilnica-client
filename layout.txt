@@ -1,0 +1,30 @@
+src/
+│
+├─ components/
+│   ├─ ui/                ← shadcn components live here
+│   │   ├─ button.tsx
+│   │   ├─ card.tsx
+│   │   ├─ badge.tsx
+│   │   ├─ select.tsx
+│   │   └─ separator.tsx
+│   │
+│   ├─ layout/
+│   │   ├─ Header.tsx
+│   │   └─ Container.tsx
+│   │
+│   ├─ dashboard/
+│   │   ├─ PersonalInfoCard.tsx
+│   │   ├─ ActivitySheetCard.tsx
+│   │   ├─ PreviousSheetsCard.tsx
+│   │   ├─ SupplementaryCard.tsx
+│   │   └─ MessagesCard.tsx
+│
+├─ pages/
+│   └─ Dashboard.tsx
+│
+├─ lib/
+│   └─ utils.ts           ← shadcn helper (cn function)
+│
+├─ index.css
+├─ main.tsx
+└─ App.tsx
