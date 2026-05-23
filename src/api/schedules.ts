@@ -116,8 +116,13 @@ async function uploadSchedule(payload: UploadSchedulePayload): Promise<UploadSch
   form.append("StartDate", payload.startDate)
   form.append("EndDate", payload.endDate)
 
+  // FET imports parse two big XML files, hash the activities, and seed many
+  // child tables — easily blows past the 30s axios default on a cold DB. Give
+  // it the default plus an extra two minutes.
+  const baseTimeout = apiClient.defaults.timeout ?? 30_000
   const { data } = await apiClient.post<UploadScheduleResult>(`${RESOURCE}/upload`, form, {
     headers: { "Content-Type": "multipart/form-data" },
+    timeout: baseTimeout + 2 * 60 * 1000,
   })
   return data
 }

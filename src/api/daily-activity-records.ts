@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { UseQueryOptions } from "@tanstack/react-query"
 import { apiClient } from "./client"
+import { scheduleKeys } from "./schedules"
 
 export const RevenueType = {
   BaseSalary: 0,
@@ -39,6 +40,7 @@ export interface DailyActivityRecord {
   observations: string | null
   startDate: string
   endDate: string
+  activitySlotId: number | null
 }
 
 export interface CreateDailyActivityRecordPayload {
@@ -58,6 +60,7 @@ export interface CreateDailyActivityRecordPayload {
   observations?: string | null
   startDate: string
   endDate: string
+  activitySlotId?: number | null
 }
 
 export interface UpdateDailyActivityRecordPayload {
@@ -77,6 +80,7 @@ export interface UpdateDailyActivityRecordPayload {
   observations?: string | null
   startDate?: string | null
   endDate?: string | null
+  activitySlotId?: number | null
 }
 
 export interface MonthlyActivitySummary {
@@ -103,6 +107,19 @@ export interface QueryDailyActivityRecordsParams {
 
 const RESOURCE = "/api/DailyActivityRecords"
 
+export type DayStatus = "free" | "future" | "missing" | "partial" | "completed"
+
+export interface DayStatusEntry {
+  day: string
+  status: DayStatus
+}
+
+export interface QueryDayStatusesParams {
+  teacherId: number
+  startDate: string
+  endDate: string
+}
+
 export const dailyActivityRecordKeys = {
   all: ["daily-activity-records"] as const,
   byId: (id: string) => [...dailyActivityRecordKeys.all, "by-id", id] as const,
@@ -110,6 +127,8 @@ export const dailyActivityRecordKeys = {
     [...dailyActivityRecordKeys.all, "query", params] as const,
   monthlySummary: (teacherId: number) =>
     [...dailyActivityRecordKeys.all, "monthly-summary", teacherId] as const,
+  dayStatuses: (params: QueryDayStatusesParams) =>
+    [...dailyActivityRecordKeys.all, "day-statuses", params] as const,
 }
 
 async function fetchById(id: string): Promise<DailyActivityRecord> {
@@ -150,6 +169,29 @@ async function fetchMonthlySummary(teacherId: number): Promise<MonthlyActivitySu
   return data
 }
 
+async function fetchDayStatuses(
+  params: QueryDayStatusesParams,
+): Promise<DayStatusEntry[]> {
+  const { data } = await apiClient.get<DayStatusEntry[]>(`${RESOURCE}/day-statuses`, {
+    params,
+  })
+  return data
+}
+
+export function useDayStatuses(params: QueryDayStatusesParams | undefined) {
+  const safe = params ?? { teacherId: 0, startDate: "", endDate: "" }
+  return useQuery({
+    queryKey: dailyActivityRecordKeys.dayStatuses(safe),
+    queryFn: () => fetchDayStatuses(safe),
+    enabled:
+      Boolean(params) &&
+      Number.isFinite(params?.teacherId) &&
+      (params?.teacherId ?? 0) > 0 &&
+      Boolean(params?.startDate) &&
+      Boolean(params?.endDate),
+  })
+}
+
 export function useMonthlyActivitySummary(teacherId: number | undefined) {
   return useQuery({
     queryKey: dailyActivityRecordKeys.monthlySummary(teacherId ?? 0),
@@ -181,13 +223,20 @@ export function useDailyActivityRecords(params: QueryDailyActivityRecordsParams)
   })
 }
 
+// Records and the schedule's "available slots" view depend on each other: once a
+// record exists for a (subject, hour) on a date the backend removes that slot
+// from the scheduled-today list. Every record mutation has to invalidate both
+// sides so the calendar dots and slot list update without a manual refresh.
+function invalidateRecordCaches(qc: ReturnType<typeof useQueryClient>) {
+  void qc.invalidateQueries({ queryKey: dailyActivityRecordKeys.all })
+  void qc.invalidateQueries({ queryKey: scheduleKeys.all })
+}
+
 export function useCreateDailyActivityRecord() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: createRecord,
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: dailyActivityRecordKeys.all })
-    },
+    onSuccess: () => invalidateRecordCaches(qc),
   })
 }
 
@@ -197,7 +246,7 @@ export function useUpdateDailyActivityRecord() {
     mutationFn: updateRecord,
     onSuccess: (record) => {
       qc.setQueryData(dailyActivityRecordKeys.byId(record.id), record)
-      void qc.invalidateQueries({ queryKey: dailyActivityRecordKeys.all })
+      invalidateRecordCaches(qc)
     },
   })
 }
@@ -207,7 +256,7 @@ export function useDeleteDailyActivityRecord() {
   return useMutation({
     mutationFn: deleteRecord,
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: dailyActivityRecordKeys.all })
+      invalidateRecordCaches(qc)
     },
   })
 }
