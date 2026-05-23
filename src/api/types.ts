@@ -1,5 +1,3 @@
-// Cross-cutting helpers used by hooks/pages.
-
 import type { DailyActivityRecord } from "./daily-activity-records"
 import { RevenueType } from "./daily-activity-records"
 
