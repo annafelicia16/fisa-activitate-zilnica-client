@@ -8,11 +8,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Affix, AffixInput, InputAffix } from "@/components/ui/input-affix"
 import { Field } from "@/components/common/Field"
 import { Pill } from "@/components/common/Pill"
-import {
-  ACTIVITY_KINDS,
-  activityMultiplier,
-  type ActivityKind,
-} from "@/utils/activity"
+import { ACTIVITY_KINDS, type ActivityKind } from "@/utils/activity"
 import { fmtDateInput } from "@/utils/dates"
 import { useTeacherStore } from "@/store/teacher"
 
@@ -23,9 +19,11 @@ export interface ActivityFormData {
   studyProgram: string
   year: string
   group: string
-  subgroup: string
   subject: string
-  activityType: string
+  // Always one of ACTIVITY_KINDS — slot/record loaders normalize unknown
+  // strings (e.g. "Lab", "Laboratory") into the canonical Romanian kind so
+  // the segmented control can highlight the selection.
+  activityType: ActivityKind
   room: string
   revenue: "NB" | "PO"
   actualHours: string
@@ -109,21 +107,13 @@ function FacultyRow({
           placeholder="II"
         />
       </Field>
-      <Field label="Grupă / subgrupă" required>
-        <InputAffix>
-          <AffixInput
-            className="font-mono"
-            placeholder="3211"
-            value={state.group}
-            onChange={(e) => onChange({ group: e.target.value })}
-          />
-          <AffixInput
-            className="font-mono border-l border-border max-w-[60px]"
-            placeholder="A"
-            value={state.subgroup}
-            onChange={(e) => onChange({ subgroup: e.target.value })}
-          />
-        </InputAffix>
+      <Field label="Grupă" required>
+        <Input
+          className="font-mono"
+          placeholder="3211"
+          value={state.group}
+          onChange={(e) => onChange({ group: e.target.value })}
+        />
       </Field>
     </div>
   )
@@ -146,14 +136,10 @@ function SubjectRow({
         />
       </Field>
       <Field label="Tip activitate" required>
-        <Segmented<ActivityKind | "Other">
+        <Segmented<ActivityKind>
           fullWidth
-          value={(ACTIVITY_KINDS as readonly string[]).includes(state.activityType)
-            ? (state.activityType as ActivityKind)
-            : "Other"}
-          onChange={(v) =>
-            onChange({ activityType: v === "Other" ? state.activityType : v })
-          }
+          value={state.activityType}
+          onChange={(v) => onChange({ activityType: v })}
           options={ACTIVITY_KINDS.map((k) => ({ value: k, label: k }))}
         />
       </Field>
@@ -176,9 +162,8 @@ function HoursRow({
   state: ActivityFormData
   onChange: ActivityRecordFormProps["onChange"]
 }) {
-  const mult = activityMultiplier(state.activityType)
   return (
-    <div className="grid grid-cols-3 gap-3">
+    <div className="grid grid-cols-2 gap-3">
       <Field label="Ore efective" required>
         <InputAffix>
           <AffixInput
@@ -189,17 +174,6 @@ function HoursRow({
             onChange={(e) => onChange({ actualHours: e.target.value })}
           />
           <Affix>h</Affix>
-        </InputAffix>
-      </Field>
-      <Field label="Multiplicator">
-        <InputAffix>
-          <Affix side="left">×</Affix>
-          <AffixInput
-            className="font-mono tnum"
-            readOnly
-            tabIndex={-1}
-            value={mult.toFixed(1)}
-          />
         </InputAffix>
       </Field>
       <Field label="Ore convenționale" required>

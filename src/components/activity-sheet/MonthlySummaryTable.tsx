@@ -15,6 +15,7 @@ interface MonthlySummaryTableProps {
   summary: MonthAggregate
   records: DailyActivityRecord[]
   onExport?: () => void
+  exportDisabled?: boolean
 }
 
 export function MonthlySummaryTable({
@@ -23,6 +24,7 @@ export function MonthlySummaryTable({
   summary,
   records,
   onExport,
+  exportDisabled,
 }: MonthlySummaryTableProps) {
   const totals = ACTIVITY_KINDS.reduce<Record<string, { nb: number; po: number; count: number }>>(
     (acc, k) => {
@@ -53,7 +55,7 @@ export function MonthlySummaryTable({
         </CardTitle>
         <Badge variant="accent">Ciornă</Badge>
         {onExport && (
-          <Button variant="default" size="sm" onClick={onExport}>
+          <Button variant="default" size="sm" onClick={onExport} disabled={exportDisabled}>
             <DownloadIcon className="size-3" /> Exportă centralizator
           </Button>
         )}

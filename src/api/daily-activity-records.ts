@@ -31,7 +31,6 @@ export interface DailyActivityRecord {
   courseType: string
   year: number
   groupName: string
-  subgroupName: string | null
   subjectName: string
   roomName: string
   revenueType: RevenueType
@@ -51,7 +50,6 @@ export interface CreateDailyActivityRecordPayload {
   courseType: string
   year: number
   groupName: string
-  subgroupName?: string | null
   subjectName: string
   roomName: string
   revenueType: RevenueType
@@ -71,7 +69,6 @@ export interface UpdateDailyActivityRecordPayload {
   courseType?: string | null
   year?: number | null
   groupName?: string | null
-  subgroupName?: string | null
   subjectName?: string | null
   roomName?: string | null
   revenueType?: RevenueType | null
@@ -96,7 +93,6 @@ export interface QueryDailyActivityRecordsParams {
   departmentName?: string
   year?: number
   groupName?: string
-  subgroupName?: string
   subjectName?: string
   roomName?: string
   revenueType?: RevenueType

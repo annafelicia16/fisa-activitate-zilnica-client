@@ -29,11 +29,10 @@ import {
 } from "@/api/daily-activity-records"
 import { aggregateMonth } from "@/api/types"
 import { useTeacherDaySlotsByDate, type TeacherScheduleSlot } from "@/api/schedules"
-import { useSupplementaryActivities } from "@/api/supplementary-activities"
+import { useDownloadMonthlyActivitySheet } from "@/api/export"
 import { useTeacherStore } from "@/store/teacher"
 import { MONTHS_RO, shiftMonth, ymd } from "@/utils/dates"
 import { conventionalHours } from "@/utils/activity"
-import { exportDailyActivitySheetPdf } from "@/utils/pdfDailySheet"
 
 export function DailyActivitySheet() {
   const navigate = useNavigate()
@@ -54,9 +53,6 @@ export function DailyActivitySheet() {
   const [toast, setToast] = useState<string | null>(null)
 
   const { data: records = [] } = useDailyActivityRecords({ teacherId: externalTeacherId })
-  const { data: supplementaryEntries = [] } = useSupplementaryActivities({
-    teacherId: externalTeacherId,
-  })
   const { data: scheduleSlots = [], isLoading: slotsLoading } = useTeacherDaySlotsByDate(
     externalTeacherId && form.date ? { externalTeacherId, date: form.date } : undefined,
   )
@@ -81,6 +77,7 @@ export function DailyActivitySheet() {
 
   const createMutation = useCreateDailyActivityRecord()
   const updateMutation = useUpdateDailyActivityRecord()
+  const exportMutation = useDownloadMonthlyActivitySheet()
   const saving = createMutation.isPending || updateMutation.isPending
 
   const recordsByDate = useMemo(() => {
@@ -169,18 +166,15 @@ export function DailyActivitySheet() {
     setDirty(false)
   }
 
-  async function handleExport() {
-    await exportDailyActivitySheetPdf({
-      records,
-      supplementary: supplementaryEntries,
-      teacher: {
-        fullName: teacher.fullName ?? teacher.teacherName ?? "",
-        department: teacher.department ?? "",
-        academicYear: teacher.academicYear ?? "",
+  function handleExport() {
+    if (!externalTeacherId || exportMutation.isPending) return
+    exportMutation.mutate(
+      { teacherId: externalTeacherId, year: calMonth.year, month: calMonth.month + 1 },
+      {
+        onSuccess: () => setToast("PDF generat."),
+        onError: () => setToast("Eroare la generarea PDF-ului."),
       },
-      year: calMonth.year,
-      month: calMonth.month,
-    })
+    )
   }
 
   return (
@@ -247,6 +241,7 @@ export function DailyActivitySheet() {
           summary={monthAgg}
           records={records}
           onExport={handleExport}
+          exportDisabled={exportMutation.isPending}
         />
       </div>
 

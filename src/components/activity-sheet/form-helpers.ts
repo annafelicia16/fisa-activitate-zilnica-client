@@ -5,9 +5,24 @@ import {
 } from "@/api/daily-activity-records"
 import { recordActualHours } from "@/api/types"
 import type { TeacherScheduleSlot } from "@/api/schedules"
-import { conventionalHours } from "@/utils/activity"
+import {
+  conventionalHours,
+  normalizeActivityType,
+  type ActivityKind,
+} from "@/utils/activity"
 import { ymd } from "@/utils/dates"
+import { displayGroup } from "@/utils/group"
+import { formatSlotStartTime } from "@/utils/slot"
 import type { ActivityFormData } from "./ActivityRecordForm"
+
+// Normalize incoming activity strings (FET tags, legacy courseType values like
+// "Lab", "Lecture", or even "Other") into one of the four canonical kinds the
+// form's segmented control can highlight. Defaults to "Curs" so we never leave
+// the segmented in an "untouched" state.
+function canonicalKind(value: string | null | undefined): Exclude<ActivityKind, "Other"> {
+  const k = normalizeActivityType(value)
+  return k === "Other" ? "Curs" : k
+}
 
 export const EMPTY_FORM: ActivityFormData = {
   date: "",
@@ -16,7 +31,6 @@ export const EMPTY_FORM: ActivityFormData = {
   studyProgram: "",
   year: "",
   group: "",
-  subgroup: "",
   subject: "",
   activityType: "Curs",
   room: "",
@@ -40,10 +54,9 @@ export function recordToForm(record: DailyActivityRecord): ActivityFormData {
     faculty: record.facultyName,
     studyProgram: record.studyProgram,
     year: String(record.year),
-    group: record.groupName,
-    subgroup: record.subgroupName ?? "",
+    group: displayGroup(record.groupName),
     subject: record.subjectName,
-    activityType: record.courseType,
+    activityType: canonicalKind(record.courseType),
     room: record.roomName,
     revenue: record.revenueType === RevenueType.BaseSalary ? "NB" : "PO",
     actualHours: actual ? actual.toString() : "",
@@ -57,22 +70,21 @@ export function slotToForm(
   prev: ActivityFormData,
   slot: TeacherScheduleSlot,
 ): ActivityFormData {
-  const kind = slot.oldActivityTag || slot.courseTypeTag || "Curs"
+  const kind = canonicalKind(slot.oldActivityTag || slot.courseTypeTag)
   const duration = slot.duration && slot.duration > 0 ? slot.duration : 1
   const conv = conventionalHours(duration, kind)
-  const startHourMatch = slot.hourName.match(/^(\d{1,2})(?::(\d{2}))?/)
-  const time = startHourMatch
-    ? `${startHourMatch[1].padStart(2, "0")}:${(startHourMatch[2] ?? "00").padStart(2, "0")}`
-    : ""
-  const friendlyGroup = slot.grupa?.split(",")[0]?.trim() ?? ""
+  const time = formatSlotStartTime(slot.hourName) ?? ""
+  // Group preference: backend-resolved AGSIS dbo.Grupe.Nume ("8MF141") →
+  // FET file's free-form name ("IE3") → raw external ID. The whole-class
+  // sentinel ("-1") and unresolved values get collapsed to "-" by displayGroup.
+  const fetGroup = slot.grupa?.split(",")[0]?.trim() ?? ""
   return {
     ...prev,
     time,
     faculty: slot.facultateName || prev.faculty,
     studyProgram: slot.specializareName || prev.studyProgram,
     year: slot.nrAnStudii != null ? String(slot.nrAnStudii) : prev.year,
-    group: friendlyGroup || slot.idGrupa || prev.group,
-    subgroup: "",
+    group: displayGroup(slot.grupaName || fetGroup || slot.idGrupa || prev.group),
     subject: slot.materieName || slot.subjectName || prev.subject,
     activityType: kind,
     room: slot.roomName ?? prev.room,
@@ -110,10 +122,9 @@ export function formToPayload(
     departmentName: dept || form.faculty || "",
     facultyName: form.faculty,
     studyProgram: form.studyProgram,
-    courseType: form.activityType || "Other",
+    courseType: form.activityType,
     year: parseInt(form.year, 10) || 0,
     groupName: form.group,
-    subgroupName: form.subgroup || null,
     subjectName: form.subject,
     roomName: form.room,
     revenueType: form.revenue === "NB" ? RevenueType.BaseSalary : RevenueType.HourlyPay,

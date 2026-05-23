@@ -37,6 +37,9 @@ export interface TeacherScheduleSlot {
   materieShortName: string | null
   facultateName: string | null
   specializareName: string | null
+  // Friendly AGSIS group name (dbo.Grupe.Nume, e.g. "8MF141"). Backend
+  // resolves it from idGrupa; null for whole-class slots or unresolved IDs.
+  grupaName: string | null
 }
 
 export interface UploadScheduleResult {
@@ -72,6 +75,7 @@ const RESOURCE = "/api/v1/Schedules"
 
 export const scheduleKeys = {
   all: ["schedules"] as const,
+  allList: () => [...scheduleKeys.all, "all"] as const,
   byExternalTeacher: (externalTeacherId: number) =>
     [...scheduleKeys.all, "by-external-teacher", externalTeacherId] as const,
   teacherDaySlots: (params: TeacherDaySlotsParams) =>
@@ -87,6 +91,18 @@ async function fetchSchedulesByExternalTeacher(
     `${RESOURCE}/by-external-teacher/${externalTeacherId}`,
   )
   return data
+}
+
+async function fetchAllSchedules(): Promise<ScheduleSummary[]> {
+  const { data } = await apiClient.get<ScheduleSummary[]>(RESOURCE)
+  return data
+}
+
+export function useAllSchedules() {
+  return useQuery({
+    queryKey: scheduleKeys.allList(),
+    queryFn: fetchAllSchedules,
+  })
 }
 
 async function fetchTeacherDaySlots(

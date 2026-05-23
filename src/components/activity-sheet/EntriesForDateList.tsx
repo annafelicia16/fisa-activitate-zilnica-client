@@ -6,6 +6,7 @@ import { recordActualHours } from "@/api/types"
 import type { DailyActivityRecord } from "@/api/daily-activity-records"
 import { RevenueType } from "@/api/daily-activity-records"
 import { fmtDateLong } from "@/utils/dates"
+import { summaryGroup } from "@/utils/group"
 import { cn } from "@/lib/utils"
 import { format } from "date-fns"
 
@@ -47,6 +48,9 @@ export function EntriesForDateList({
             const time = format(start, "HH:mm")
             const actual = recordActualHours(r)
             const revenue = r.revenueType === RevenueType.BaseSalary ? "NB" : "PO"
+            // Drop the "Gr. X" segment for whole-class records ("-1" / "-" /
+            // empty) — they get a meta line without the group at all.
+            const group = summaryGroup(r.groupName)
             return (
               <button
                 key={r.id}
@@ -69,8 +73,14 @@ export function EntriesForDateList({
                 </div>
                 <div className="flex gap-2 text-[11px] text-text-muted">
                   <span className="font-mono truncate">
-                    {r.facultyName} · {r.studyProgram} · An {r.year} · Gr. {r.groupName}
-                    {r.subgroupName ? `/${r.subgroupName}` : ""}
+                    {[
+                      r.facultyName,
+                      r.studyProgram,
+                      `An ${r.year}`,
+                      group ? `Gr. ${group}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
                   </span>
                   <span className="ml-auto whitespace-nowrap">
                     {r.roomName} · {revenue}

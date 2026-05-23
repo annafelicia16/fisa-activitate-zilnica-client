@@ -1,4 +1,4 @@
-import { ArrowRightIcon, ClipboardListIcon } from "lucide-react"
+import { ArrowRightIcon, ClipboardListIcon, DownloadIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
@@ -13,9 +13,19 @@ interface ThisMonthCardProps {
   summary: MonthAggregate
   status?: "Draft" | "Submitted" | "Approved"
   onOpen: () => void
+  onDownloadPdf?: () => void
+  downloadDisabled?: boolean
 }
 
-export function ThisMonthCard({ year, month, summary, status = "Draft", onOpen }: ThisMonthCardProps) {
+export function ThisMonthCard({
+  year,
+  month,
+  summary,
+  status = "Draft",
+  onOpen,
+  onDownloadPdf,
+  downloadDisabled,
+}: ThisMonthCardProps) {
   return (
     <Card>
       <CardHeader>
@@ -38,6 +48,11 @@ export function ThisMonthCard({ year, month, summary, status = "Draft", onOpen }
             : `${summary.records} înregistrări totale · ${summary.total.toFixed(1)} ore convenționale.`}
         </span>
         <div className="flex-1" />
+        {onDownloadPdf && (
+          <Button variant="default" onClick={onDownloadPdf} disabled={downloadDisabled}>
+            <DownloadIcon className="size-3" /> Descarcă PDF
+          </Button>
+        )}
         <Button variant="default" onClick={onOpen}>
           <ClipboardListIcon className="size-3" /> Deschide fișa zilnică{" "}
           <ArrowRightIcon className="size-3" />

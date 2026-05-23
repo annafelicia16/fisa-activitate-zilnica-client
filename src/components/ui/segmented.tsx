@@ -24,7 +24,10 @@ export function Segmented<T extends string = string>({
     <div
       className={cn(
         "inline-flex gap-px rounded-[--r-md] border border-border bg-surface-2 p-0.5",
-        fullWidth && "w-full",
+        // Sits inside flex-col Fields (align-items: stretch by default), so without
+        // self-start the pill row would balloon to the column's full width. Opt out
+        // when the caller actually wants a full-bleed control.
+        fullWidth ? "w-full" : "w-fit self-start",
         className,
       )}
       role="radiogroup"

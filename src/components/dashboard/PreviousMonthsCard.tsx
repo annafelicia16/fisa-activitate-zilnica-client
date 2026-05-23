@@ -1,4 +1,4 @@
-import { ChevronRightIcon } from "lucide-react"
+import { ChevronRightIcon, DownloadIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/common/StatusBadge"
@@ -10,6 +10,8 @@ interface PreviousMonthsCardProps {
   loading?: boolean
   error?: boolean
   onOpenMonth: (year: number, month: number) => void
+  onDownloadPdf?: (year: number, month: number) => void
+  downloadDisabled?: boolean
 }
 
 export function PreviousMonthsCard({
@@ -17,6 +19,8 @@ export function PreviousMonthsCard({
   loading,
   error,
   onOpenMonth,
+  onDownloadPdf,
+  downloadDisabled,
 }: PreviousMonthsCardProps) {
   const rows = (summaries ?? []).slice().sort((a, b) => {
     if (b.year !== a.year) return b.year - a.year
@@ -65,13 +69,27 @@ export function PreviousMonthsCard({
                   {m.totalConventionalHours.toFixed(1)}
                 </td>
                 <td className="px-3 py-2.5 text-right">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onOpenMonth(m.year, m.month - 1)}
-                  >
-                    Deschide <ChevronRightIcon className="size-3" />
-                  </Button>
+                  <div className="inline-flex items-center gap-1">
+                    {onDownloadPdf && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => onDownloadPdf(m.year, m.month)}
+                        disabled={downloadDisabled}
+                        aria-label="Descarcă PDF"
+                        title="Descarcă PDF"
+                      >
+                        <DownloadIcon className="size-3" />
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onOpenMonth(m.year, m.month - 1)}
+                    >
+                      Deschide <ChevronRightIcon className="size-3" />
+                    </Button>
+                  </div>
                 </td>
               </tr>
             ))}

@@ -4,6 +4,8 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card"
 import { ActivityTag } from "@/components/common/ActivityTag"
 import { activityMultiplier } from "@/utils/activity"
 import { fmtDateShort } from "@/utils/dates"
+import { summaryGroup } from "@/utils/group"
+import { formatSlotStartTime } from "@/utils/slot"
 import type { TeacherScheduleSlot } from "@/api/schedules"
 
 interface ScheduledSlotsListProps {
@@ -15,10 +17,15 @@ interface ScheduledSlotsListProps {
 
 function describeSlot(slot: TeacherScheduleSlot) {
   const subject = slot.materieName || slot.subjectName || "Curs"
+  // Prefer the AGSIS group name ("8MF141"); fall back to the FET file's
+  // free-form name, then the raw external ID. Whole-class slots (idGrupa
+  // "-1") collapse to null so we just drop the "Gr. X" segment entirely.
+  const fetGroup = slot.grupa?.split(",")[0]?.trim() ?? ""
+  const group = summaryGroup(slot.grupaName || fetGroup || slot.idGrupa)
   const meta = [
     slot.specializareName,
     slot.nrAnStudii != null ? `An ${slot.nrAnStudii}` : null,
-    slot.grupa ? `Gr. ${slot.grupa.split(",")[0]?.trim()}` : null,
+    group ? `Gr. ${group}` : null,
     slot.roomName,
   ]
     .filter(Boolean)
@@ -78,7 +85,9 @@ export function ScheduledSlotsList({ date, slots, loading, onFill }: ScheduledSl
               onClick={() => onFill(slot)}
               className="grid w-full grid-cols-[auto_auto_1fr_auto_auto] items-center gap-2.5 border-t border-border px-3.5 py-2.5 text-left transition-colors hover:bg-hover"
             >
-              <span className="w-16 font-mono text-[11px] text-text-muted">{slot.hourName}</span>
+              <span className="w-16 font-mono text-[11px] text-text-muted">
+                {formatSlotStartTime(slot.hourName) ?? slot.hourName}
+              </span>
               <ActivityTag type={kind} />
               <div className="min-w-0">
                 <div className="truncate text-[12.5px] font-medium">{subject}</div>

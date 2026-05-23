@@ -14,6 +14,7 @@ import {
 } from "@/api/daily-activity-records"
 import { useSupplementaryActivities } from "@/api/supplementary-activities"
 import { useTeacherProfile } from "@/api/external-teachers"
+import { useDownloadMonthlyActivitySheet } from "@/api/export"
 import { useTeacherStore } from "@/store/teacher"
 
 export function Dashboard() {
@@ -33,6 +34,7 @@ export function Dashboard() {
     isError: monthsError,
   } = useMonthlyActivitySummary(externalTeacherId)
   const { data: profile } = useTeacherProfile(externalTeacherId)
+  const exportMutation = useDownloadMonthlyActivitySheet()
 
   useEffect(() => {
     if (profile) setFromProfile(profile)
@@ -80,6 +82,17 @@ export function Dashboard() {
           summary={monthAgg}
           status="Draft"
           onOpen={() => navigate("/activity-sheet")}
+          onDownloadPdf={
+            externalTeacherId
+              ? () =>
+                  exportMutation.mutate({
+                    teacherId: externalTeacherId,
+                    year: today.getFullYear(),
+                    month: today.getMonth() + 1,
+                  })
+              : undefined
+          }
+          downloadDisabled={!externalTeacherId || exportMutation.isPending}
         />
         <SupplementaryMiniCard
           year={today.getFullYear()}
@@ -92,6 +105,13 @@ export function Dashboard() {
           loading={monthsLoading}
           error={monthsError}
           onOpenMonth={() => navigate("/activity-sheet")}
+          onDownloadPdf={
+            externalTeacherId
+              ? (year, month) =>
+                  exportMutation.mutate({ teacherId: externalTeacherId, year, month })
+              : undefined
+          }
+          downloadDisabled={!externalTeacherId || exportMutation.isPending}
         />
       </div>
     </div>

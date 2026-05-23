@@ -3,13 +3,13 @@ import { useNavigate } from "react-router-dom"
 import axios from "axios"
 import { CheckIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardHeader, CardTitle } from "@/components/ui/card"
 import { Breadcrumb } from "@/components/common/Breadcrumb"
 import {
   ScheduleUploadForm,
   type ScheduleFormState,
 } from "@/components/admin/ScheduleUploadForm"
-import { useUploadSchedule } from "@/api/schedules"
+import { ExistingSchedulesList } from "@/components/admin/ExistingSchedulesList"
+import { useAllSchedules, useUploadSchedule } from "@/api/schedules"
 
 const INITIAL: ScheduleFormState = {
   name: "Orar 2025–2026 · Semestrul 2",
@@ -33,6 +33,11 @@ function yearOf(value: string): number {
 export function Admin() {
   const navigate = useNavigate()
   const uploadMutation = useUploadSchedule()
+  const {
+    data: existingSchedules,
+    isLoading: existingLoading,
+    isError: existingError,
+  } = useAllSchedules()
   const [state, setState] = useState<ScheduleFormState>(INITIAL)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<{ scheduleId: number; slotCount?: number } | null>(null)
@@ -98,14 +103,11 @@ export function Admin() {
             error={error}
           />
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Orare existente</CardTitle>
-            </CardHeader>
-            <div className="px-4 py-6 text-[12.5px] text-text-muted">
-              Lista orarelor importate va apărea aici după primul import.
-            </div>
-          </Card>
+          <ExistingSchedulesList
+            schedules={existingSchedules}
+            loading={existingLoading}
+            error={existingError}
+          />
 
           {success && (
             <div className="col-span-2 flex items-center gap-3 rounded-[--r-lg] border border-transparent bg-st-approved-soft px-4 py-3.5">
