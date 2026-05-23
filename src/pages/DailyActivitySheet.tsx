@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { Calendar } from "@/components/ui/calendar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -6,37 +6,34 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
+// Faculty / Study Program / Discipline / Activity Type are now free-text Inputs:
+// values come from the schedule data and aren't constrained to a fixed list.
 import { Container } from "@/components/layout/Container"
 import { format } from "date-fns"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import { ensureRomanianPdfFont, PDF_FONT_NAME } from "@/utils/pdfFont"
 import type { DayStatus } from "@/types/activity-sheet"
-
-
-const FACULTIES = [
-    "Faculty of Computer Science",
-    "Faculty of Engineering",
-    "Faculty of Mathematics",
-    "Faculty of Physics"
-]
-
-const STUDY_PROGRAMS: Record<string, string[]> = {
-    "Faculty of Computer Science": ["Computer Science", "Software Engineering", "Information Systems"],
-    "Faculty of Engineering": ["Mechanical Engineering", "Electrical Engineering", "Civil Engineering"],
-    "Faculty of Mathematics": ["Mathematics", "Applied Mathematics", "Statistics"],
-    "Faculty of Physics": ["Physics", "Applied Physics", "Theoretical Physics"]
-}
-
-const DISCIPLINES = [
-    "Data Structures",
-    "Algorithms",
-    "Database Systems",
-    "Web Development",
-    "Machine Learning",
-    "Operating Systems"
-]
+import { useTeacherStore } from "@/store/teacher"
+import {
+    RevenueType,
+    useCreateDailyActivityRecord,
+    useDailyActivityRecords,
+    useUpdateDailyActivityRecord,
+    type DailyActivityRecord,
+} from "@/api/daily-activity-records"
+import { useSupplementaryActivities } from "@/api/supplementary-activities"
+import {
+    useTeacherDaySlotsByDate,
+    type TeacherScheduleSlot,
+} from "@/api/schedules"
 
 interface ActivityFormData {
     date: string
@@ -54,272 +51,209 @@ interface ActivityFormData {
     observations: string
 }
 
-interface HeaderData {
-    teacherName: string
-    department: string
-    academicYear: string
-}
-
 interface FormErrors {
     [key: string]: string
 }
 
-const STORAGE_KEY = "daily-activity-entries"
-const HEADER_STORAGE_KEY = "daily-activity-header"
-
-interface StoredActivityEntry {
-    entries: ActivityFormData[]
-    status: DayStatus
+const EMPTY_FORM: ActivityFormData = {
+    date: format(new Date(), "yyyy-MM-dd"),
+    time: "",
+    faculty: "",
+    studyProgram: "",
+    discipline: "",
+    activityType: "",
+    year: "",
+    group: "",
+    room: "",
+    actualHours: "",
+    conventionalHours: "",
+    status: "",
+    observations: "",
 }
 
-interface AnnexFormData {
-    date: string
-    activityType: string
-    observations: string
-    totalHours: string
+function calculateConventionalHours(actual: string, activityType: string): string {
+    const hours = parseFloat(actual)
+    if (isNaN(hours) || hours < 0) return ""
+
+    const lower = activityType.trim().toLowerCase()
+    let multiplier = 1.0
+    if (lower.startsWith("course") || lower.startsWith("curs")) multiplier = 2.5
+    else if (lower.startsWith("seminar")) multiplier = 1.5
+    // "Lab"/"Laborator"/"Laboratory" and anything else default to 1.0
+
+    return (hours * multiplier).toString()
 }
 
+function parseHourSlot(
+    hourName: string,
+    fallbackDurationHours: number,
+): { time: string; durationHours: number } | null {
+    // Accepts: "08:00-09:50", "8-10" (range — duration derived from end−start), and single
+    // start values like "12" or "12:00" (duration falls back to fallbackDurationHours,
+    // which the caller computes from Activity.Duration on the slot).
+    const rangeMatch = hourName.match(/(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?/)
+    if (rangeMatch) {
+        const startH = parseInt(rangeMatch[1], 10)
+        const startM = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : 0
+        const endH = parseInt(rangeMatch[3], 10)
+        const endM = rangeMatch[4] ? parseInt(rangeMatch[4], 10) : 0
+        if (![startH, startM, endH, endM].some((n) => Number.isNaN(n))) {
+            const time = `${String(startH).padStart(2, "0")}:${String(startM).padStart(2, "0")}`
+            const durationMinutes = endH * 60 + endM - (startH * 60 + startM)
+            if (durationMinutes > 0) {
+                return { time, durationHours: durationMinutes / 60 }
+            }
+        }
+    }
 
-export function ActivityCalendar() {
-  return (
-    <div className="rounded-xl border bg-white p-4">
-      <h3 className="mb-4 text-lg font-semibold">Calendar</h3>
-      <Calendar />
-    </div>
-  )
+    const singleMatch = hourName.match(/^(\d{1,2})(?::(\d{2}))?$/)
+    if (singleMatch) {
+        const startH = parseInt(singleMatch[1], 10)
+        const startM = singleMatch[2] ? parseInt(singleMatch[2], 10) : 0
+        if (!Number.isNaN(startH) && startH >= 0 && startH < 24) {
+            const time = `${String(startH).padStart(2, "0")}:${String(startM).padStart(2, "0")}`
+            return { time, durationHours: fallbackDurationHours }
+        }
+    }
+
+    return null
 }
 
+function recordToForm(record: DailyActivityRecord): ActivityFormData {
+    const start = new Date(record.startDate)
+    const end = new Date(record.endDate)
+    const actualMs = end.getTime() - start.getTime()
+    const actualHours = actualMs > 0 ? actualMs / (60 * 60 * 1000) : 0
+
+    return {
+        date: format(start, "yyyy-MM-dd"),
+        time: format(start, "HH:mm"),
+        faculty: record.facultyName,
+        studyProgram: record.studyProgram,
+        discipline: record.subjectName,
+        activityType: record.courseType,
+        year: String(record.year),
+        group: record.groupName,
+        room: record.roomName,
+        actualHours: actualHours ? actualHours.toString() : "",
+        conventionalHours: record.conventionalHours.toString(),
+        status: record.revenueType === RevenueType.BaseSalary ? "NB" : "PO",
+        observations: record.observations ?? "",
+    }
+}
+
+function formToPayload(form: ActivityFormData, teacherId: number, departmentName: string) {
+    const startIso = `${form.date}T${form.time || "00:00"}:00`
+    const start = new Date(startIso)
+    const actualHours = parseFloat(form.actualHours || "0") || 0
+    const end = new Date(start.getTime() + actualHours * 60 * 60 * 1000)
+    const revenue = form.status === "NB" ? RevenueType.BaseSalary : RevenueType.HourlyPay
+
+    return {
+        externalTeacherId: teacherId,
+        departmentName: departmentName || form.faculty,
+        facultyName: form.faculty,
+        studyProgram: form.studyProgram,
+        courseType: form.activityType || "Other",
+        year: parseInt(form.year, 10) || 0,
+        groupName: form.group,
+        subjectName: form.discipline,
+        roomName: form.room,
+        revenueType: revenue,
+        conventionalHours: parseFloat(form.conventionalHours || "0") || 0,
+        observations: form.observations || null,
+        startDate: start.toISOString(),
+        endDate: end.toISOString(),
+    }
+}
+
+function deriveDayStatus(record: DailyActivityRecord): DayStatus {
+    return record.observations && record.observations.trim().length > 0
+        ? "completed"
+        : "partial"
+}
 
 export function DailyActivitySheet() {
     const navigate = useNavigate()
-    const today = new Date()
+    const teacher = useTeacherStore()
+    const externalTeacherId = teacher.externalTeacherId ?? 0
+
+    const today = useMemo(() => new Date(), [])
     const [selectedDate, setSelectedDate] = useState<Date | undefined>(today)
-    const [dayStatuses, setDayStatuses] = useState<Map<string, DayStatus>>(new Map())
-    const [headerData, setHeaderData] = useState<HeaderData>({
-        teacherName: "",
-        department: "",
-        academicYear: ""
-    })
-    const [formData, setFormData] = useState<ActivityFormData>({
-        date: format(today, "yyyy-MM-dd"),
-        time: "",
-        faculty: "",
-        studyProgram: "",
-        discipline: "",
-        activityType: "",
-        year: "",
-        group: "",
-        room: "",
-        actualHours: "",
-        conventionalHours: "",
-        status: "",
-        observations: ""
-    })
+    const [formData, setFormData] = useState<ActivityFormData>(EMPTY_FORM)
     const [errors, setErrors] = useState<FormErrors>({})
-    const [availableStudyPrograms, setAvailableStudyPrograms] = useState<string[]>([])
-    const [dayEntries, setDayEntries] = useState<ActivityFormData[]>([])
-    const [editingIndex, setEditingIndex] = useState<number | null>(null)
+    const [editingRecordId, setEditingRecordId] = useState<string | null>(null)
 
-    const calculateConventionalHours = (actual: string, activityType: string): string => {
-        const hours = parseFloat(actual)
+    const { data: records = [], isLoading: recordsLoading } = useDailyActivityRecords({
+        teacherId: externalTeacherId,
+    })
+    const { data: supplementaryRecords = [] } = useSupplementaryActivities({
+        teacherId: externalTeacherId,
+    })
+    const { data: scheduleSlots = [], isLoading: slotsLoading } = useTeacherDaySlotsByDate(
+        externalTeacherId && formData.date
+            ? { externalTeacherId, date: formData.date }
+            : undefined,
+    )
+    const createMutation = useCreateDailyActivityRecord()
+    const updateMutation = useUpdateDailyActivityRecord()
 
-        if (isNaN(hours) || hours < 0) {
-            return ""
+    const recordsByDate = useMemo(() => {
+        const map = new Map<string, DailyActivityRecord[]>()
+        for (const record of records) {
+            const key = format(new Date(record.startDate), "yyyy-MM-dd")
+            const list = map.get(key) ?? []
+            list.push(record)
+            map.set(key, list)
         }
+        return map
+    }, [records])
 
-        let multiplier = 1.0
-
-        if (activityType === "Course") {
-            multiplier = 2.5
-        } else if (activityType === "Seminar") {
-            multiplier = 1.5
+    const dayStatuses = useMemo(() => {
+        const map = new Map<string, DayStatus>()
+        for (const [key, list] of recordsByDate) {
+            const allCompleted = list.every((r) => deriveDayStatus(r) === "completed")
+            map.set(key, allCompleted ? "completed" : "partial")
         }
+        return map
+    }, [recordsByDate])
 
-        const result = hours * multiplier
-        return result.toString()
-    }
+    const dayEntries = useMemo(() => {
+        const key = formData.date
+        return recordsByDate.get(key) ?? []
+    }, [recordsByDate, formData.date])
 
-    useEffect(() => {
-        if (typeof window === "undefined") {
-            return
-        }
-
-        try {
-            const headerRaw = localStorage.getItem(HEADER_STORAGE_KEY)
-            if (headerRaw) {
-                const header: HeaderData = JSON.parse(headerRaw)
-                setHeaderData(header)
-            }
-
-            const raw = localStorage.getItem(STORAGE_KEY)
-            if (!raw) {
-                return
-            }
-
-            const stored: Record<string, any> = JSON.parse(raw)
-
-            const statuses = new Map<string, DayStatus>()
-            Object.entries(stored).forEach(([dateKey, value]) => {
-                if (value && value.status) {
-                    statuses.set(dateKey, value.status as DayStatus)
-                }
-            })
-
-            if (statuses.size > 0) {
-                setDayStatuses(statuses)
-            }
-
-            const initialDateKey = format(today, "yyyy-MM-dd")
-            const initialEntry = stored[initialDateKey]
-            if (initialEntry) {
-                const entries: ActivityFormData[] =
-                    Array.isArray(initialEntry.entries) && initialEntry.entries.length > 0
-                        ? initialEntry.entries
-                        : initialEntry.formData
-                            ? [initialEntry.formData]
-                            : []
-
-                const latestForm: ActivityFormData | undefined =
-                    entries.length > 0 ? entries[entries.length - 1] : undefined
-
-                setDayEntries(entries)
-
-                if (latestForm) {
-                    setFormData(latestForm)
-                    setAvailableStudyPrograms(
-                        STUDY_PROGRAMS[latestForm.faculty] || []
-                    )
-                }
-
-                setEditingIndex(null)
-            }
-        } catch (error) {
-            console.error("Error initializing daily activity data", error)
-        }
-    }, [])
-
-    const handleFacultyChange = (faculty: string) => {
-        setFormData(prev => ({
-            ...prev,
-            faculty,
-            studyProgram: ""
-        }))
-        setAvailableStudyPrograms(STUDY_PROGRAMS[faculty] || [])
-    }
-
-    const handleDateSelect = (date: Date | undefined) => {
-        if (date) {
-            setSelectedDate(date)
-            setFormData(prev => ({
-                ...prev,
-                date: format(date, "yyyy-MM-dd")
-            }))
-            loadDayData(date)
-        }
-    }
-
-    const loadDayData = (_date: Date) => {
-        const dateKey = format(_date, "yyyy-MM-dd")
-
-        if (typeof window === "undefined") {
-            return
-        }
-
-        try {
-            const raw = localStorage.getItem(STORAGE_KEY)
-
-            if (!raw) {
-                setFormData({
-                    date: dateKey,
-                    time: "",
-                    faculty: "",
-                    studyProgram: "",
-                    discipline: "",
-                    activityType: "",
-                    year: "",
-                    group: "",
-                    room: "",
-                    actualHours: "",
-                    conventionalHours: "",
-                    status: "",
-                    observations: ""
-                })
-                setAvailableStudyPrograms([])
-                setErrors({})
-                setDayEntries([])
-                setEditingIndex(null)
-                return
-            }
-
-            const stored: Record<string, any> = JSON.parse(raw)
-            const entry = stored[dateKey]
-
-            if (entry) {
-                const entries: ActivityFormData[] =
-                    Array.isArray(entry.entries) && entry.entries.length > 0
-                        ? entry.entries
-                        : entry.formData
-                            ? [entry.formData]
-                            : []
-
-                setDayEntries(entries)
-
-                const latestForm: ActivityFormData | undefined =
-                    entries.length > 0 ? entries[entries.length - 1] : undefined
-
-                if (latestForm) {
-                    setFormData(latestForm)
-                    setAvailableStudyPrograms(
-                        STUDY_PROGRAMS[latestForm.faculty] || []
-                    )
-                } else {
-                    setFormData({
-                        date: dateKey,
-                        time: "",
-                        faculty: "",
-                        studyProgram: "",
-                        discipline: "",
-                        activityType: "",
-                        year: "",
-                        group: "",
-                        room: "",
-                        actualHours: "",
-                        conventionalHours: "",
-                        status: "",
-                        observations: ""
-                    })
-                    setAvailableStudyPrograms([])
-                }
-                setErrors({})
+    const monthlySummary = useMemo(() => {
+        const monthlyData: Record<string, { nb: number; po: number }> = {}
+        for (const record of records) {
+            const date = new Date(record.startDate)
+            const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`
+            if (!monthlyData[monthKey]) monthlyData[monthKey] = { nb: 0, po: 0 }
+            if (record.revenueType === RevenueType.BaseSalary) {
+                monthlyData[monthKey].nb += record.conventionalHours
             } else {
-                setFormData({
-                    date: dateKey,
-                    time: "",
-                    faculty: "",
-                    studyProgram: "",
-                    discipline: "",
-                    activityType: "",
-                    year: "",
-                    group: "",
-                    room: "",
-                    actualHours: "",
-                    conventionalHours: "",
-                    status: "",
-                    observations: ""
-                })
-                setAvailableStudyPrograms([])
-                setErrors({})
-                setDayEntries([])
-                setEditingIndex(null)
+                monthlyData[monthKey].po += record.conventionalHours
             }
-        } catch (error) {
-            console.error("Error loading day data", error)
         }
+        return Object.entries(monthlyData)
+            .map(([month, totals]) => ({ month, ...totals }))
+            .sort((a, b) => b.month.localeCompare(a.month))
+    }, [records])
+
+    function resetFormForDate(date: Date) {
+        setFormData({ ...EMPTY_FORM, date: format(date, "yyyy-MM-dd") })
+        setErrors({})
+        setEditingRecordId(null)
     }
 
-    const validateForm = (): boolean => {
-        const newErrors: FormErrors = {}
+    function handleDateSelect(date: Date | undefined) {
+        if (!date) return
+        setSelectedDate(date)
+        resetFormForDate(date)
+    }
 
+    function validateForm(): boolean {
+        const newErrors: FormErrors = {}
         if (!formData.date) newErrors.date = "Date is required"
         if (!formData.faculty) newErrors.faculty = "Faculty is required"
         if (!formData.studyProgram) newErrors.studyProgram = "Study Program is required"
@@ -332,225 +266,177 @@ export function DailyActivitySheet() {
             newErrors.actualHours = "Actual Hours is required"
         } else {
             const hours = parseFloat(formData.actualHours)
-            if (isNaN(hours) || hours < 0) {
+            if (isNaN(hours) || hours < 0)
                 newErrors.actualHours = "Actual Hours must be a valid positive number"
-            }
         }
         if (!formData.conventionalHours) {
             newErrors.conventionalHours = "Conventional Hours is required"
         } else {
             const hours = parseFloat(formData.conventionalHours)
-            if (isNaN(hours) || hours < 0) {
+            if (isNaN(hours) || hours < 0)
                 newErrors.conventionalHours = "Conventional Hours must be a valid positive number"
-            }
         }
-
         setErrors(newErrors)
         return Object.keys(newErrors).length === 0
     }
-    const getDatesByStatus = (status: DayStatus): Date[] => {
+
+    function getDatesByStatus(status: DayStatus): Date[] {
         const dates: Date[] = []
-        dayStatuses.forEach((dayStatus, dateKey) => {
-            if (dayStatus === status) {
-                dates.push(new Date(dateKey))
-            }
+        dayStatuses.forEach((s, key) => {
+            if (s === status) dates.push(new Date(key))
         })
         return dates
     }
 
-    const checkForDuplicateEntry = (): boolean => {
-        if (typeof window === "undefined") {
-            return false
+    async function handleSave() {
+        if (!externalTeacherId) {
+            alert("You are not signed in.")
+            return
         }
+        if (!validateForm()) return
+
+        const payload = formToPayload(formData, externalTeacherId, teacher.department)
 
         try {
-            const raw = localStorage.getItem(STORAGE_KEY)
-            if (!raw) {
-                return false
+            if (editingRecordId) {
+                await updateMutation.mutateAsync({ id: editingRecordId, ...payload })
+            } else {
+                await createMutation.mutateAsync(payload)
             }
-
-            const stored: Record<string, any> = JSON.parse(raw)
-            for (const [dateKey, value] of Object.entries(stored)) {
-                const entries: ActivityFormData[] =
-                    Array.isArray(value.entries) && value.entries.length > 0
-                        ? value.entries
-                        : value.formData
-                            ? [value.formData]
-                            : []
-
-                for (let i = 0; i < entries.length; i++) {
-                    const entry = entries[i]
-                    if (
-                        editingIndex !== null &&
-                        dateKey === formData.date &&
-                        i === editingIndex
-                    ) {
-                        continue
-                    }
-                    if (
-                        entry.date === formData.date &&
-                        entry.time === formData.time &&
-                        entry.room === formData.room
-                    ) {
-                        return true
-                    }
-                }
-            }
-
-            return false
-        } catch (error) {
-            console.error("Error checking for duplicate entry", error)
-            return false
-        }
-    }
-
-    const handleSave = () => {
-        if (validateForm()) {
-            if (checkForDuplicateEntry()) {
-                alert(
-                    "⚠️ Warning: An entry with the same Date, Time, and Room already exists!\n\n" +
-                    "Please verify your entry details or modify the Date, Time, or Room to proceed."
-                )
-                return
-            }
-
-            const dateKey = formData.date
-            let status: DayStatus = "completed"
-            if (!formData.observations || !formData.status) {
-                status = "partial"
-            }
-            setDayStatuses(prev => new Map(prev).set(dateKey, status))
-
-            if (typeof window !== "undefined") {
-                try {
-                    const raw = localStorage.getItem(STORAGE_KEY)
-                    const stored: Record<string, any> = raw ? JSON.parse(raw) : {}
-                    const existing = stored[dateKey]
-
-                    const existingEntries: ActivityFormData[] =
-                        existing && Array.isArray(existing.entries)
-                            ? existing.entries
-                            : existing && existing.formData
-                                ? [existing.formData]
-                                : []
-
-                    let newEntries: ActivityFormData[]
-                    if (
-                        editingIndex !== null &&
-                        editingIndex >= 0 &&
-                        editingIndex < existingEntries.length
-                    ) {
-                        newEntries = [...existingEntries]
-                        newEntries[editingIndex] = { ...formData }
-                    } else {
-                        newEntries = [...existingEntries, { ...formData }]
-                    }
-
-                    const updatedEntry: StoredActivityEntry = {
-                        entries: newEntries,
-                        status
-                    }
-
-                    stored[dateKey] = updatedEntry
-
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored))
-                    setDayEntries(updatedEntry.entries)
-                } catch (error) {
-                    console.error("Error saving daily activity data", error)
-                }
-            }
-
             alert("Activity sheet saved successfully!")
-            setEditingIndex(null)
-            const baseDate =
-                selectedDate ?? (formData.date ? new Date(formData.date) : today)
-            const resetDateKey = format(baseDate, "yyyy-MM-dd")
-
-            setFormData({
-                date: resetDateKey,
-                time: "",
-                faculty: "",
-                studyProgram: "",
-                discipline: "",
-            activityType: "",
-                year: "",
-                group: "",
-                room: "",
-                actualHours: "",
-                conventionalHours: "",
-                status: "",
-                observations: ""
-            })
-            setAvailableStudyPrograms([])
-            setErrors({})
+            const baseDate = selectedDate ?? new Date(formData.date)
+            resetFormForDate(baseDate)
+        } catch (error) {
+            console.error("Error saving daily activity record", error)
+            const message = error instanceof Error ? error.message : String(error)
+            alert(`Could not save activity sheet.\n\n${message}`)
         }
     }
 
-    const handleSubmit = () => {
+    async function handleDuplicate() {
+        if (!externalTeacherId) return
+        if (!validateForm()) return
+
+        const payload = formToPayload(formData, externalTeacherId, teacher.department)
+        try {
+            await createMutation.mutateAsync(payload)
+            alert("Row duplicated for this day. You can now edit it and save again.")
+            setEditingRecordId(null)
+        } catch (error) {
+            console.error("Error duplicating row", error)
+        }
+    }
+
+    function handleEditEntry(record: DailyActivityRecord) {
+        const form = recordToForm(record)
+        setFormData(form)
+        setErrors({})
+        setEditingRecordId(record.id)
+    }
+
+    function handleApplyScheduleSlot(slot: TeacherScheduleSlot) {
+        // activityType is now free-text: use the raw oldActivityTag ("Laborator"/"Curs"/"Seminar"
+        // straight from FET) when present; otherwise fall back to the ActivityTag join name.
+        const activityType = slot.oldActivityTag || slot.courseTypeTag || ""
+        // hourName may be "08:00-09:50" (full range) or just "12" (start hour only) — in the
+        // latter case, the slot row counts one academic hour and we use Activity.Duration
+        // for the full session length.
+        const fallbackDuration = slot.duration && slot.duration > 0 ? slot.duration : 1
+        const parsed = parseHourSlot(slot.hourName, fallbackDuration)
+        const actualHours = parsed ? parsed.durationHours.toString() : formData.actualHours
+        const time = parsed ? parsed.time : formData.time
+        const nextConventional = parsed
+            ? calculateConventionalHours(actualHours, activityType)
+            : formData.conventionalHours
+
+        // Group: prefer the friendly grupa name → external group id → specialization id (when
+        // grupa is empty, courses cover an entire specialization). idSpecializare uses -1
+        // as a sentinel for "no specialization".
+        const friendlyGroup = slot.grupa?.split(",")[0]?.trim()
+        const specializationStr =
+            slot.idSpecializare && slot.idSpecializare > 0
+                ? String(slot.idSpecializare)
+                : null
+        const groupValue =
+            friendlyGroup || slot.idGrupa || specializationStr || formData.group
+
+        const status: "NB" | "PO" | "" =
+            slot.plataNB === 1 ? "NB" : slot.plataNB === 0 ? "PO" : formData.status
+
+        const yearValue =
+            slot.nrAnStudii != null ? String(slot.nrAnStudii) : formData.year
+
+        // Prefer the friendly names from the AGSIS Materie/Facultate/Specializare tables
+        // when available; fall back to the FET subject code so the field is never empty.
+        const discipline = slot.materieName || slot.subjectName
+        const faculty = slot.facultateName || formData.faculty
+        const studyProgram = slot.specializareName || formData.studyProgram
+
+        setFormData((prev) => ({
+            ...prev,
+            time,
+            faculty,
+            studyProgram,
+            discipline,
+            activityType,
+            year: yearValue,
+            group: groupValue,
+            room: slot.roomName ?? prev.room,
+            actualHours,
+            conventionalHours: nextConventional,
+            status,
+        }))
+        setErrors({})
+    }
+
+    function handleSubmit() {
         if (validateForm()) {
             alert("Activity sheet submitted for approval!")
             navigate("/")
         }
     }
 
-    const handleExport = async () => {
-        if (typeof window === "undefined") return
-
+    async function handleExport() {
         try {
             const doc = new jsPDF("p", "mm", "a4")
             await ensureRomanianPdfFont(doc)
             const pageWidth = doc.internal.pageSize.getWidth()
 
-            const storedRaw = localStorage.getItem(STORAGE_KEY)
-            const headerRaw = localStorage.getItem(HEADER_STORAGE_KEY)
-
-            const stored: Record<string, any> = storedRaw ? JSON.parse(storedRaw) : {}
-            const header: HeaderData | null = headerRaw ? JSON.parse(headerRaw) : null
-
-            const allEntries: ActivityFormData[] = []
-            Object.entries(stored).forEach(([dateKey, value]) => {
-                const entries: ActivityFormData[] =
-                    Array.isArray(value.entries) && value.entries.length > 0
-                        ? value.entries
-                        : value.formData
-                            ? [value.formData]
-                            : []
-
-                entries.forEach(entry => {
-                    allEntries.push({
-                        ...entry,
-                        date: entry.date || dateKey
-                    })
-                })
-            })
-
-            if (allEntries.length === 0) {
+            if (records.length === 0) {
                 alert("No daily activity data found to export.")
                 return
             }
 
-            allEntries.sort((a, b) => (a.date || "").localeCompare(b.date || ""))
-            const firstDate = new Date(allEntries[0].date)
+            const allEntries = records
+                .map((r) => ({ form: recordToForm(r), record: r }))
+                .sort((a, b) => a.form.date.localeCompare(b.form.date))
+
+            const firstDate = new Date(allEntries[0].form.date)
             const monthLabel = !isNaN(firstDate.getTime())
                 ? firstDate.toLocaleDateString("ro-RO", { month: "long", year: "numeric" })
                 : ""
 
             doc.setFont(PDF_FONT_NAME, "normal")
             doc.setFontSize(11)
-            doc.text("UNIVERSITATEA TRANSILVANIA DIN BRAȘOV", pageWidth / 2, 15, { align: "center" })
+            doc.text("UNIVERSITATEA TRANSILVANIA DIN BRAȘOV", pageWidth / 2, 15, {
+                align: "center",
+            })
 
-            const facultyText = header?.department ? `FACULTATEA ${header.department}` : "FACULTATEA ................................"
+            const facultyText = teacher.department
+                ? `FACULTATEA ${teacher.department}`
+                : "FACULTATEA ................................"
             doc.text(facultyText, pageWidth / 2, 21, { align: "center" })
 
             doc.setFontSize(10)
             const startYInfo = 30
-            const academicYear = header?.academicYear || ".............."
-            const department = header?.department || ".............."
-            const teacherName = header?.teacherName || ".............."
+            const academicYear = teacher.academicYear || ".............."
+            const department = teacher.department || ".............."
+            const teacherName = teacher.fullName || teacher.teacherName || ".............."
 
             doc.text(`Anul universitar: ${academicYear}`, 20, startYInfo)
             doc.text(`Departamentul: ${department}`, 20, startYInfo + 6)
             doc.text(`Cadrul didactic: ${teacherName}`, 20, startYInfo + 12)
+
             const titleY = startYInfo + 28
             doc.setFontSize(13)
             doc.setFont(PDF_FONT_NAME, "bold")
@@ -559,58 +445,63 @@ export function DailyActivitySheet() {
             doc.setFontSize(11)
             const subtitle = monthLabel ? `Luna ${monthLabel}` : "Luna .............................."
             doc.text(subtitle, pageWidth / 2, titleY + 7, { align: "center" })
+
             const tableBody: (string | number)[][] = []
             let nbTotal = 0
             let poTotal = 0
 
-            allEntries.forEach(entry => {
-                const dateObj = new Date(entry.date)
+            allEntries.forEach(({ form, record }) => {
+                const dateObj = new Date(form.date)
                 const dayNumber = !isNaN(dateObj.getTime()) ? dateObj.getDate() : ""
-                const convHours = parseFloat(entry.conventionalHours || "0") || 0
+                const convHours = record.conventionalHours
 
-                if (entry.status === "NB") {
+                if (record.revenueType === RevenueType.BaseSalary) {
                     nbTotal += convHours
-                } else if (entry.status === "PO") {
+                } else {
                     poTotal += convHours
                 }
 
                 tableBody.push([
                     dayNumber.toString(),
-                    entry.time || "",
-                    entry.faculty || "",
-                    entry.studyProgram || "",
-                    entry.discipline || "",
-                    entry.year || "",
-                    entry.group || "",
-                    entry.room || "",
-                    entry.actualHours || "",
-                    entry.conventionalHours || "",
-                    entry.status || "",
-                    ""
+                    form.time || "",
+                    form.faculty || "",
+                    form.studyProgram || "",
+                    form.discipline || "",
+                    form.year || "",
+                    form.group || "",
+                    form.room || "",
+                    form.actualHours || "",
+                    form.conventionalHours || "",
+                    form.status || "",
+                    "",
                 ])
             })
 
-            const totalComplementary = 0
+            const totalComplementary = supplementaryRecords.reduce(
+                (sum, e) => sum + (e.totalHours || 0),
+                0,
+            )
             const totalWorked = nbTotal + poTotal + totalComplementary
 
             doc.setFont(PDF_FONT_NAME, "normal")
-            console.log("Font loaded successfully for DailyActivitySheet main table")
             autoTable(doc, {
                 startY: titleY + 14,
-                head: [[
-                    "Ziua (1)",
-                    "Ora (2)",
-                    "Facultatea (3)",
-                    "Program de studii (4)",
-                    "Disciplina (5)",
-                    "Anul (6)",
-                    "Grupa (7)",
-                    "Sala (8)",
-                    "Ore efective (9)",
-                    "Ore convenționale (10)",
-                    "Norma NB/PO (11)",
-                    "Semnătura (12)"
-                ]],
+                head: [
+                    [
+                        "Ziua (1)",
+                        "Ora (2)",
+                        "Facultatea (3)",
+                        "Program de studii (4)",
+                        "Disciplina (5)",
+                        "Anul (6)",
+                        "Grupa (7)",
+                        "Sala (8)",
+                        "Ore efective (9)",
+                        "Ore convenționale (10)",
+                        "Norma NB/PO (11)",
+                        "Semnătura (12)",
+                    ],
+                ],
                 body: tableBody,
                 styles: {
                     font: PDF_FONT_NAME,
@@ -618,25 +509,26 @@ export function DailyActivitySheet() {
                     halign: "center",
                     valign: "middle",
                     lineColor: [0, 0, 0],
-                    lineWidth: 0.2
+                    lineWidth: 0.2,
                 },
                 headStyles: {
                     fillColor: [255, 255, 255],
                     textColor: [0, 0, 0],
                     lineWidth: 0.4,
                     lineColor: [0, 0, 0],
-                    fontStyle: "bold"
+                    fontStyle: "bold",
                 },
                 columnStyles: {
                     4: { halign: "left" },
                     2: { halign: "left" },
-                    3: { halign: "left" }
+                    3: { halign: "left" },
                 },
                 margin: { left: 10, right: 10 },
-                theme: "grid"
+                theme: "grid",
             })
 
-            let finalY = (doc as any).lastAutoTable.finalY || (titleY + 20)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            let finalY = (doc as any).lastAutoTable.finalY || titleY + 20
             doc.setFontSize(10)
             const rowHeight = 6
             const leftX = 10
@@ -653,8 +545,12 @@ export function DailyActivitySheet() {
 
             drawSummaryRow("Total ore convenționale NB", nbTotal.toFixed(2))
             drawSummaryRow("Total ore convenționale PO", poTotal.toFixed(2))
-            drawSummaryRow("Total ore activități didactice complementare*", totalComplementary.toFixed(2))
+            drawSummaryRow(
+                "Total ore activități didactice complementare*",
+                totalComplementary.toFixed(2),
+            )
             drawSummaryRow("TOTAL ore lucrate", totalWorked.toFixed(2), true)
+
             const signaturesY = finalY + 14
             doc.setFont(PDF_FONT_NAME, "normal")
             doc.text("Decan,", leftX, signaturesY)
@@ -664,93 +560,59 @@ export function DailyActivitySheet() {
             doc.text(dottedLine, leftX, signaturesY + 10)
             doc.text(dottedLine, rightX, signaturesY + 10, { align: "right" })
 
-            const annexRaw = localStorage.getItem("supplementary-annex-entries")
-            if (annexRaw) {
-                const annexStored: Record<string, any> = JSON.parse(annexRaw)
-                const annexEntries: { date: string; activityType: string; observations: string; totalHours: string }[] = []
+            if (supplementaryRecords.length > 0) {
+                doc.addPage()
+                await ensureRomanianPdfFont(doc)
+                const annexPageWidth = doc.internal.pageSize.getWidth()
 
-                Object.entries(annexStored).forEach(([dateKey, value]) => {
-                    const entries: AnnexFormData[] =
-                        Array.isArray((value as any).entries) && (value as any).entries.length > 0
-                            ? (value as any).entries
-                            : (value as any).formData
-                                ? [(value as any).formData]
-                                : []
-
-                    entries.forEach(e => {
-                        annexEntries.push({
-                            ...e,
-                            date: e.date || dateKey
-                        })
-                    })
+                doc.setFont(PDF_FONT_NAME, "bold")
+                doc.setFontSize(14)
+                doc.text("ANEXĂ ACTIVITĂȚI COMPLEMENTARE", annexPageWidth / 2, 20, {
+                    align: "center",
                 })
 
-                if (annexEntries.length > 0) {
-                    annexEntries.sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+                doc.setFontSize(11)
+                doc.setFont(PDF_FONT_NAME, "normal")
+                autoTable(doc, {
+                    startY: 30,
+                    head: [["Data", "Tip Activitate", "Descriere / Detalii", "Ore"]],
+                    body: supplementaryRecords.map((e) => [
+                        format(new Date(e.date), "yyyy-MM-dd"),
+                        e.activityType,
+                        e.observations ?? "",
+                        e.totalHours.toString(),
+                    ]),
+                    styles: {
+                        font: PDF_FONT_NAME,
+                        fontSize: 9,
+                        halign: "center",
+                        valign: "middle",
+                        lineColor: [0, 0, 0],
+                        lineWidth: 0.2,
+                    },
+                    headStyles: {
+                        fillColor: [255, 255, 255],
+                        textColor: [0, 0, 0],
+                        lineWidth: 0.4,
+                        lineColor: [0, 0, 0],
+                        fontStyle: "bold",
+                    },
+                    columnStyles: { 2: { halign: "left" } },
+                    margin: { left: 10, right: 10 },
+                    theme: "grid",
+                })
 
-                    doc.addPage()
-                    await ensureRomanianPdfFont(doc)
-                    const annexPageWidth = doc.internal.pageSize.getWidth()
-
-                    doc.setFont(PDF_FONT_NAME, "bold")
-                    doc.setFontSize(14)
-                    doc.text("ANEXĂ ACTIVITĂȚI COMPLEMENTARE", annexPageWidth / 2, 20, {
-                        align: "center"
-                    })
-
-                    doc.setFontSize(11)
-                    doc.setFont(PDF_FONT_NAME, "normal")
-                    console.log("Font loaded successfully for DailyActivitySheet annex table")
-                    autoTable(doc, {
-                        startY: 30,
-                        head: [[
-                            "Data",
-                            "Tip Activitate",
-                            "Descriere / Detalii",
-                            "Ore"
-                        ]],
-                        body: annexEntries.map(e => [
-                            e.date,
-                            e.activityType || "",
-                            e.observations || "",
-                            e.totalHours || ""
-                        ]),
-                        styles: {
-                            font: PDF_FONT_NAME,
-                            fontSize: 9,
-                            halign: "center",
-                            valign: "middle",
-                            lineColor: [0, 0, 0],
-                            lineWidth: 0.2
-                        },
-                        headStyles: {
-                            fillColor: [255, 255, 255],
-                            textColor: [0, 0, 0],
-                            lineWidth: 0.4,
-                            lineColor: [0, 0, 0],
-                            fontStyle: "bold"
-                        },
-                        columnStyles: {
-                            2: { halign: "left" }
-                        },
-                        margin: { left: 10, right: 10 },
-                        theme: "grid"
-                    })
-
-                    const annexFinalY = (doc as any).lastAutoTable.finalY || 60
-                    const annexTotalHours = annexEntries.reduce(
-                        (sum, e) => sum + (parseFloat(e.totalHours || "0") || 0),
-                        0
-                    )
-
-                    doc.setFontSize(10)
-                    doc.setFont(PDF_FONT_NAME, "bold")
-                    doc.text(
-                        `Total ore activități didactice complementare: ${annexTotalHours.toFixed(2)}`,
-                        10,
-                        annexFinalY + 8
-                    )
-                }
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const annexFinalY = (doc as any).lastAutoTable.finalY || 60
+                doc.setFontSize(10)
+                doc.setFont(PDF_FONT_NAME, "bold")
+                doc.text(
+                    `Total ore activități didactice complementare: ${totalComplementary.toFixed(
+                        2,
+                    )}`,
+                    10,
+                    annexFinalY + 8,
+                )
             }
 
             doc.save("fisa-activitate-zilnica.pdf")
@@ -760,133 +622,6 @@ export function DailyActivitySheet() {
             alert(`An error occurred while exporting the PDF.\n\nDetails: ${message}`)
         }
     }
-
-    const handleDuplicate = () => {
-        const dateKey = formData.date
-        if (!dateKey) {
-            return
-        }
-
-        if (checkForDuplicateEntry()) {
-            alert(
-                "⚠️ Warning: An entry with the same Date, Time, and Room already exists!\n\n" +
-                "Please verify your entry details or modify the Date, Time, or Room to proceed."
-            )
-            return
-        }
-
-        let status: DayStatus = "completed"
-        if (!formData.observations || !formData.status) {
-            status = "partial"
-        }
-
-        setDayStatuses(prev => new Map(prev).set(dateKey, status))
-
-        if (typeof window !== "undefined") {
-            try {
-                const raw = localStorage.getItem(STORAGE_KEY)
-                const stored: Record<string, any> = raw ? JSON.parse(raw) : {}
-                const existing = stored[dateKey]
-
-                const existingEntries: ActivityFormData[] =
-                    existing && Array.isArray(existing.entries)
-                        ? existing.entries
-                        : existing && existing.formData
-                            ? [existing.formData]
-                            : []
-
-                const updatedEntry: StoredActivityEntry = {
-                    entries: [...existingEntries, { ...formData }],
-                    status: existing && existing.status ? existing.status as DayStatus : status
-                }
-
-                stored[dateKey] = updatedEntry
-
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(stored))
-                setDayEntries(updatedEntry.entries)
-                alert("Row duplicated for this day. You can now edit it and save again.")
-            } catch (error) {
-                console.error("Error duplicating daily activity row", error)
-            }
-        }
-    }
-
-    const handleEditEntry = (index: number) => {
-        const entry = dayEntries[index]
-        if (!entry) {
-            return
-        }
-
-        setFormData(entry)
-        setAvailableStudyPrograms(STUDY_PROGRAMS[entry.faculty] || [])
-        setErrors({})
-        setEditingIndex(index)
-    }
-
-    const handleHeaderChange = (field: keyof HeaderData, value: string) => {
-        const updated = { ...headerData, [field]: value }
-        setHeaderData(updated)
-        if (typeof window !== "undefined") {
-            try {
-                localStorage.setItem(HEADER_STORAGE_KEY, JSON.stringify(updated))
-            } catch (error) {
-                console.error("Error saving header data", error)
-            }
-        }
-    }
-
-    const getMonthlySummary = () => {
-        if (typeof window === "undefined") {
-            return []
-        }
-
-        try {
-            const raw = localStorage.getItem(STORAGE_KEY)
-            if (!raw) {
-                return []
-            }
-
-            const stored: Record<string, any> = JSON.parse(raw)
-            const monthlyData: Record<string, { nb: number; po: number }> = {}
-
-            Object.entries(stored).forEach(([dateKey, value]) => {
-                const entries: ActivityFormData[] =
-                    Array.isArray(value.entries) && value.entries.length > 0
-                        ? value.entries
-                        : value.formData
-                            ? [value.formData]
-                            : []
-
-                entries.forEach((entry) => {
-                    const date = new Date(dateKey)
-                    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`
-                    const convHours = parseFloat(entry.conventionalHours || "0") || 0
-
-                    if (!monthlyData[monthKey]) {
-                        monthlyData[monthKey] = { nb: 0, po: 0 }
-                    }
-
-                    if (entry.status === "NB") {
-                        monthlyData[monthKey].nb += convHours
-                    } else if (entry.status === "PO") {
-                        monthlyData[monthKey].po += convHours
-                    }
-                })
-            })
-
-            return Object.entries(monthlyData)
-                .map(([month, totals]) => ({
-                    month,
-                    ...totals
-                }))
-                .sort((a, b) => b.month.localeCompare(a.month))
-        } catch (error) {
-            console.error("Error calculating monthly summary", error)
-            return []
-        }
-    }
-
-    const monthlySummary = getMonthlySummary()
 
     return (
         <div className="min-h-screen w-full bg-[#f8f9fc] py-10">
@@ -912,8 +647,10 @@ export function DailyActivitySheet() {
                                 <Input
                                     id="teacherName"
                                     type="text"
-                                    value={headerData.teacherName}
-                                    onChange={(e) => handleHeaderChange("teacherName", e.target.value)}
+                                    value={teacher.teacherName}
+                                    onChange={(e) =>
+                                        teacher.setHeader({ teacherName: e.target.value })
+                                    }
                                     placeholder="Enter teacher name"
                                 />
                             </div>
@@ -922,8 +659,10 @@ export function DailyActivitySheet() {
                                 <Input
                                     id="department"
                                     type="text"
-                                    value={headerData.department}
-                                    onChange={(e) => handleHeaderChange("department", e.target.value)}
+                                    value={teacher.department}
+                                    onChange={(e) =>
+                                        teacher.setHeader({ department: e.target.value })
+                                    }
                                     placeholder="Enter department"
                                 />
                             </div>
@@ -932,8 +671,10 @@ export function DailyActivitySheet() {
                                 <Input
                                     id="academicYear"
                                     type="text"
-                                    value={headerData.academicYear}
-                                    onChange={(e) => handleHeaderChange("academicYear", e.target.value)}
+                                    value={teacher.academicYear}
+                                    onChange={(e) =>
+                                        teacher.setHeader({ academicYear: e.target.value })
+                                    }
                                     placeholder="e.g., 2024-2025"
                                 />
                             </div>
@@ -955,16 +696,16 @@ export function DailyActivitySheet() {
                                 modifiers={{
                                     completed: getDatesByStatus("completed"),
                                     partial: getDatesByStatus("partial"),
-                                    notCompleted: getDatesByStatus("not-completed")
+                                    notCompleted: getDatesByStatus("not-completed"),
                                 }}
                                 modifiersClassNames={{
                                     completed: "bg-green-100 hover:bg-green-200 text-gray-900",
                                     partial: "bg-yellow-100 hover:bg-yellow-200 text-gray-900",
-                                    notCompleted: "bg-red-100 hover:bg-red-200 text-gray-900"
+                                    notCompleted: "bg-red-100 hover:bg-red-200 text-gray-900",
                                 }}
                                 classNames={{
                                     day_selected: "ring-2 ring-blue-500 ring-offset-1",
-                                    day_today: "border-2 border-gray-400"
+                                    day_today: "border-2 border-gray-400",
                                 }}
                             />
                             <div className="mt-4 flex flex-col gap-2 text-sm">
@@ -982,59 +723,107 @@ export function DailyActivitySheet() {
                                 </div>
                             </div>
 
-                            {dayEntries.length > 0 && (
+                            {recordsLoading ? (
+                                <div className="mt-4 text-sm text-gray-500">Loading entries…</div>
+                            ) : dayEntries.length > 0 ? (
                                 <div className="mt-4 space-y-2 text-sm">
                                     <h4 className="font-semibold">
                                         Entries for {formData.date}
                                     </h4>
                                     <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                                        {dayEntries.map((entry, index) => (
-                                            <div
-                                                key={`${entry.time || "time"}-${index}`}
-                                                className="rounded-md border bg-muted/40 p-2 relative z-0"
+                                        {dayEntries.map((record) => {
+                                            const entry = recordToForm(record)
+                                            return (
+                                                <div
+                                                    key={record.id}
+                                                    className="rounded-md border bg-muted/40 p-2 relative z-0"
+                                                >
+                                                    <div className="flex justify-between items-center gap-2">
+                                                        <div>
+                                                            <span className="font-medium block">
+                                                                {entry.time || "No time"}
+                                                            </span>
+                                                            <span className="text-xs text-muted-foreground">
+                                                                {entry.activityType || "Activity"}
+                                                            </span>
+                                                        </div>
+                                                        <Button
+                                                            type="button"
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-6 w-6 relative z-10 pointer-events-auto cursor-pointer"
+                                                            aria-label="Modify entry"
+                                                            onClick={() => handleEditEntry(record)}
+                                                        >
+                                                            ✏️
+                                                        </Button>
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                                                        <div>
+                                                            {entry.discipline || "No discipline"} —{" "}
+                                                            {entry.group || "No group"} — Room{" "}
+                                                            {entry.room || "-"}
+                                                        </div>
+                                                        <div>
+                                                            Actual: {entry.actualHours || "0"},
+                                                            Conv.: {entry.conventionalHours || "0"}{" "}
+                                                            — Status: {entry.status || "N/A"}
+                                                        </div>
+                                                        {entry.observations && (
+                                                            <div className="mt-1 line-clamp-2">
+                                                                {entry.observations}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+                            ) : null}
+
+                            <div className="mt-4 space-y-2 text-sm">
+                                <h4 className="font-semibold">
+                                    Scheduled courses for {formData.date}
+                                </h4>
+                                {slotsLoading ? (
+                                    <div className="text-gray-500">Loading schedule…</div>
+                                ) : scheduleSlots.length === 0 ? (
+                                    <div className="text-gray-500">
+                                        No scheduled courses for this day.
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                                        {scheduleSlots.map((slot) => (
+                                            <button
+                                                type="button"
+                                                key={`${slot.slotId}-${slot.activityId}`}
+                                                onClick={() => handleApplyScheduleSlot(slot)}
+                                                className="w-full text-left rounded-md border bg-white hover:bg-muted/50 transition-colors p-2"
                                             >
                                                 <div className="flex justify-between items-center gap-2">
                                                     <div>
                                                         <span className="font-medium block">
-                                                            {entry.time || "No time"}
+                                                            {slot.hourName}
                                                         </span>
                                                         <span className="text-xs text-muted-foreground">
-                                                            {entry.activityType || "Activity"}
+                                                            {slot.courseTypeTag ?? "Activity"}
                                                         </span>
                                                     </div>
-                                                    <Button
-                                                        type="button"
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-6 w-6 relative z-10 pointer-events-auto cursor-pointer"
-                                                        aria-label="Modify entry"
-                                                        onClick={() => handleEditEntry(index)}
-                                                    >
-                                                        ✏️
-                                                    </Button>
+                                                    <span className="text-xs text-[#1e5bff]">
+                                                        Use →
+                                                    </span>
                                                 </div>
-                                                <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                                                    <div>
-                                                        {entry.discipline || "No discipline"} —{" "}
-                                                        {entry.group || "No group"} — Room{" "}
-                                                        {entry.room || "-"}
-                                                    </div>
-                                                    <div>
-                                                        Actual: {entry.actualHours || "0"}, Conv.:{" "}
-                                                        {entry.conventionalHours || "0"} — Status:{" "}
-                                                        {entry.status || "N/A"}
-                                                    </div>
-                                                    {entry.observations && (
-                                                        <div className="mt-1 line-clamp-2">
-                                                            {entry.observations}
-                                                        </div>
-                                                    )}
+                                                <div className="text-xs text-muted-foreground mt-1">
+                                                    {slot.subjectName}
+                                                    {slot.idGrupa ? ` — ${slot.idGrupa}` : ""}
+                                                    {slot.roomName ? ` — Room ${slot.roomName}` : ""}
                                                 </div>
-                                            </div>
+                                            </button>
                                         ))}
                                     </div>
-                                </div>
-                            )}
+                                )}
+                            </div>
                         </CardContent>
                     </Card>
                     <Card className="rounded-2xl shadow-sm">
@@ -1051,17 +840,20 @@ export function DailyActivitySheet() {
                                         value={formData.date}
                                         onChange={(e) => {
                                             const newDateValue = e.target.value
-                                            setFormData(prev => ({ ...prev, date: newDateValue }))
-
+                                            setFormData((prev) => ({
+                                                ...prev,
+                                                date: newDateValue,
+                                            }))
                                             const parsedDate = new Date(newDateValue)
                                             if (!isNaN(parsedDate.getTime())) {
                                                 setSelectedDate(parsedDate)
-                                                loadDayData(parsedDate)
                                             }
                                         }}
                                         className={errors.date ? "border-red-500" : ""}
                                     />
-                                    {errors.date && <p className="text-sm text-red-500">{errors.date}</p>}
+                                    {errors.date && (
+                                        <p className="text-sm text-red-500">{errors.date}</p>
+                                    )}
                                 </div>
 
                                 <div className="space-y-2">
@@ -1070,93 +862,92 @@ export function DailyActivitySheet() {
                                         id="time"
                                         type="time"
                                         value={formData.time}
-                                        onChange={(e) => setFormData(prev => ({ ...prev, time: e.target.value }))}
+                                        onChange={(e) =>
+                                            setFormData((prev) => ({ ...prev, time: e.target.value }))
+                                        }
                                     />
                                 </div>
                             </div>
 
                             <div className="space-y-2">
                                 <Label htmlFor="faculty">Faculty *</Label>
-                                <Select
+                                <Input
+                                    id="faculty"
+                                    type="text"
                                     value={formData.faculty}
-                                    onValueChange={handleFacultyChange}
-                                >
-                                    <SelectTrigger className={errors.faculty ? "border-red-500" : ""}>
-                                        <SelectValue placeholder="Select Faculty" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {FACULTIES.map((faculty) => (
-                                            <SelectItem key={faculty} value={faculty}>
-                                                {faculty}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                                {errors.faculty && <p className="text-sm text-red-500">{errors.faculty}</p>}
+                                    onChange={(e) =>
+                                        setFormData((prev) => ({
+                                            ...prev,
+                                            faculty: e.target.value,
+                                        }))
+                                    }
+                                    placeholder="e.g., Facultatea de Inginerie Electrică"
+                                    className={errors.faculty ? "border-red-500" : ""}
+                                />
+                                {errors.faculty && (
+                                    <p className="text-sm text-red-500">{errors.faculty}</p>
+                                )}
                             </div>
 
                             <div className="space-y-2">
                                 <Label htmlFor="studyProgram">Study Program *</Label>
-                                <Select
+                                <Input
+                                    id="studyProgram"
+                                    type="text"
                                     value={formData.studyProgram}
-                                    onValueChange={(value) => setFormData(prev => ({ ...prev, studyProgram: value }))}
-                                    disabled={!formData.faculty}
-                                >
-                                    <SelectTrigger className={errors.studyProgram ? "border-red-500" : ""}>
-                                        <SelectValue placeholder="Select Study Program" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {availableStudyPrograms.map((program) => (
-                                            <SelectItem key={program} value={program}>
-                                                {program}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                                {errors.studyProgram && <p className="text-sm text-red-500">{errors.studyProgram}</p>}
+                                    onChange={(e) =>
+                                        setFormData((prev) => ({
+                                            ...prev,
+                                            studyProgram: e.target.value,
+                                        }))
+                                    }
+                                    placeholder="e.g., Informatică Aplicată"
+                                    className={errors.studyProgram ? "border-red-500" : ""}
+                                />
+                                {errors.studyProgram && (
+                                    <p className="text-sm text-red-500">{errors.studyProgram}</p>
+                                )}
                             </div>
 
                             <div className="space-y-2">
                                 <Label htmlFor="discipline">Discipline *</Label>
-                                <Select
+                                <Input
+                                    id="discipline"
+                                    type="text"
                                     value={formData.discipline}
-                                    onValueChange={(value) => setFormData(prev => ({ ...prev, discipline: value }))}
-                                >
-                                    <SelectTrigger className={errors.discipline ? "border-red-500" : ""}>
-                                        <SelectValue placeholder="Select Discipline" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {DISCIPLINES.map((discipline) => (
-                                            <SelectItem key={discipline} value={discipline}>
-                                                {discipline}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                                {errors.discipline && <p className="text-sm text-red-500">{errors.discipline}</p>}
+                                    onChange={(e) =>
+                                        setFormData((prev) => ({
+                                            ...prev,
+                                            discipline: e.target.value,
+                                        }))
+                                    }
+                                    placeholder="e.g., Tehnologii Web"
+                                    className={errors.discipline ? "border-red-500" : ""}
+                                />
+                                {errors.discipline && (
+                                    <p className="text-sm text-red-500">{errors.discipline}</p>
+                                )}
                             </div>
 
                             <div className="space-y-2">
                                 <Label htmlFor="activityType">Activity Type</Label>
-                                <Select
+                                <Input
+                                    id="activityType"
+                                    type="text"
                                     value={formData.activityType}
-                                    onValueChange={(value) =>
-                                        setFormData(prev => ({
+                                    onChange={(e) => {
+                                        const value = e.target.value
+                                        setFormData((prev) => ({
                                             ...prev,
                                             activityType: value,
-                                            conventionalHours: calculateConventionalHours(prev.actualHours, value)
+                                            conventionalHours: calculateConventionalHours(
+                                                prev.actualHours,
+                                                value,
+                                            ),
                                         }))
-                                    }
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select Activity Type" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="Course">Course</SelectItem>
-                                        <SelectItem value="Seminar">Seminar</SelectItem>
-                                        <SelectItem value="Other">Other</SelectItem>
-                                    </SelectContent>
-                                </Select>
+                                    }}
+                                    placeholder="Curs / Seminar / Laborator"
+                                />
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
@@ -1166,10 +957,14 @@ export function DailyActivitySheet() {
                                         id="year"
                                         type="text"
                                         value={formData.year}
-                                        onChange={(e) => setFormData(prev => ({ ...prev, year: e.target.value }))}
+                                        onChange={(e) =>
+                                            setFormData((prev) => ({ ...prev, year: e.target.value }))
+                                        }
                                         className={errors.year ? "border-red-500" : ""}
                                     />
-                                    {errors.year && <p className="text-sm text-red-500">{errors.year}</p>}
+                                    {errors.year && (
+                                        <p className="text-sm text-red-500">{errors.year}</p>
+                                    )}
                                 </div>
 
                                 <div className="space-y-2">
@@ -1178,10 +973,14 @@ export function DailyActivitySheet() {
                                         id="group"
                                         type="text"
                                         value={formData.group}
-                                        onChange={(e) => setFormData(prev => ({ ...prev, group: e.target.value }))}
+                                        onChange={(e) =>
+                                            setFormData((prev) => ({ ...prev, group: e.target.value }))
+                                        }
                                         className={errors.group ? "border-red-500" : ""}
                                     />
-                                    {errors.group && <p className="text-sm text-red-500">{errors.group}</p>}
+                                    {errors.group && (
+                                        <p className="text-sm text-red-500">{errors.group}</p>
+                                    )}
                                 </div>
                             </div>
 
@@ -1191,10 +990,14 @@ export function DailyActivitySheet() {
                                     id="room"
                                     type="text"
                                     value={formData.room}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, room: e.target.value }))}
+                                    onChange={(e) =>
+                                        setFormData((prev) => ({ ...prev, room: e.target.value }))
+                                    }
                                     className={errors.room ? "border-red-500" : ""}
                                 />
-                                {errors.room && <p className="text-sm text-red-500">{errors.room}</p>}
+                                {errors.room && (
+                                    <p className="text-sm text-red-500">{errors.room}</p>
+                                )}
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
@@ -1208,15 +1011,20 @@ export function DailyActivitySheet() {
                                         value={formData.actualHours}
                                         onChange={(e) => {
                                             const value = e.target.value
-                                            setFormData(prev => ({
+                                            setFormData((prev) => ({
                                                 ...prev,
                                                 actualHours: value,
-                                                conventionalHours: calculateConventionalHours(value, prev.activityType)
+                                                conventionalHours: calculateConventionalHours(
+                                                    value,
+                                                    prev.activityType,
+                                                ),
                                             }))
                                         }}
                                         className={errors.actualHours ? "border-red-500" : ""}
                                     />
-                                    {errors.actualHours && <p className="text-sm text-red-500">{errors.actualHours}</p>}
+                                    {errors.actualHours && (
+                                        <p className="text-sm text-red-500">{errors.actualHours}</p>
+                                    )}
                                 </div>
 
                                 <div className="space-y-2">
@@ -1228,14 +1036,20 @@ export function DailyActivitySheet() {
                                         min="0"
                                         value={formData.conventionalHours}
                                         onChange={(e) =>
-                                            setFormData(prev => ({
+                                            setFormData((prev) => ({
                                                 ...prev,
-                                                conventionalHours: e.target.value
+                                                conventionalHours: e.target.value,
                                             }))
                                         }
-                                        className={errors.conventionalHours ? "border-red-500" : ""}
+                                        className={
+                                            errors.conventionalHours ? "border-red-500" : ""
+                                        }
                                     />
-                                    {errors.conventionalHours && <p className="text-sm text-red-500">{errors.conventionalHours}</p>}
+                                    {errors.conventionalHours && (
+                                        <p className="text-sm text-red-500">
+                                            {errors.conventionalHours}
+                                        </p>
+                                    )}
                                 </div>
                             </div>
 
@@ -1243,9 +1057,16 @@ export function DailyActivitySheet() {
                                 <Label htmlFor="status">Status *</Label>
                                 <Select
                                     value={formData.status}
-                                    onValueChange={(value) => setFormData(prev => ({ ...prev, status: value as "NB" | "PO" }))}
+                                    onValueChange={(value) =>
+                                        setFormData((prev) => ({
+                                            ...prev,
+                                            status: value as "NB" | "PO",
+                                        }))
+                                    }
                                 >
-                                    <SelectTrigger className={errors.status ? "border-red-500" : ""}>
+                                    <SelectTrigger
+                                        className={errors.status ? "border-red-500" : ""}
+                                    >
                                         <SelectValue placeholder="Select Status" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -1253,7 +1074,9 @@ export function DailyActivitySheet() {
                                         <SelectItem value="PO">PO</SelectItem>
                                     </SelectContent>
                                 </Select>
-                                {errors.status && <p className="text-sm text-red-500">{errors.status}</p>}
+                                {errors.status && (
+                                    <p className="text-sm text-red-500">{errors.status}</p>
+                                )}
                             </div>
 
                             <div className="space-y-2">
@@ -1261,7 +1084,12 @@ export function DailyActivitySheet() {
                                 <Textarea
                                     id="observations"
                                     value={formData.observations}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, observations: e.target.value }))}
+                                    onChange={(e) =>
+                                        setFormData((prev) => ({
+                                            ...prev,
+                                            observations: e.target.value,
+                                        }))
+                                    }
                                     rows={4}
                                 />
                             </div>
@@ -1271,6 +1099,7 @@ export function DailyActivitySheet() {
                                     onClick={handleDuplicate}
                                     variant="outline"
                                     className="flex-1"
+                                    disabled={createMutation.isPending}
                                 >
                                     Duplicate Row
                                 </Button>
@@ -1278,8 +1107,13 @@ export function DailyActivitySheet() {
                                     onClick={handleSave}
                                     variant="outline"
                                     className="flex-1"
+                                    disabled={
+                                        createMutation.isPending || updateMutation.isPending
+                                    }
                                 >
-                                    Save
+                                    {createMutation.isPending || updateMutation.isPending
+                                        ? "Saving…"
+                                        : "Save"}
                                 </Button>
                                 <Button
                                     onClick={handleSubmit}
@@ -1309,8 +1143,12 @@ export function DailyActivitySheet() {
                                     <thead>
                                         <tr className="border-b">
                                             <th className="text-left p-3 font-semibold">Month</th>
-                                            <th className="text-right p-3 font-semibold">NB Conventional Hours</th>
-                                            <th className="text-right p-3 font-semibold">PO Conventional Hours</th>
+                                            <th className="text-right p-3 font-semibold">
+                                                NB Conventional Hours
+                                            </th>
+                                            <th className="text-right p-3 font-semibold">
+                                                PO Conventional Hours
+                                            </th>
                                             <th className="text-right p-3 font-semibold">Total</th>
                                         </tr>
                                     </thead>
@@ -1318,13 +1156,25 @@ export function DailyActivitySheet() {
                                         {monthlySummary.map((row) => {
                                             const total = row.nb + row.po
                                             const monthDate = new Date(`${row.month}-01`)
-                                            const monthName = monthDate.toLocaleString("default", { month: "long", year: "numeric" })
+                                            const monthName = monthDate.toLocaleString("default", {
+                                                month: "long",
+                                                year: "numeric",
+                                            })
                                             return (
-                                                <tr key={row.month} className="border-b hover:bg-muted/50">
+                                                <tr
+                                                    key={row.month}
+                                                    className="border-b hover:bg-muted/50"
+                                                >
                                                     <td className="p-3">{monthName}</td>
-                                                    <td className="text-right p-3">{row.nb.toFixed(2)}</td>
-                                                    <td className="text-right p-3">{row.po.toFixed(2)}</td>
-                                                    <td className="text-right p-3 font-semibold">{total.toFixed(2)}</td>
+                                                    <td className="text-right p-3">
+                                                        {row.nb.toFixed(2)}
+                                                    </td>
+                                                    <td className="text-right p-3">
+                                                        {row.po.toFixed(2)}
+                                                    </td>
+                                                    <td className="text-right p-3 font-semibold">
+                                                        {total.toFixed(2)}
+                                                    </td>
                                                 </tr>
                                             )
                                         })}
@@ -1333,13 +1183,19 @@ export function DailyActivitySheet() {
                                         <tr className="border-t-2 font-semibold">
                                             <td className="p-3">Grand Total</td>
                                             <td className="text-right p-3">
-                                                {monthlySummary.reduce((sum, row) => sum + row.nb, 0).toFixed(2)}
+                                                {monthlySummary
+                                                    .reduce((sum, row) => sum + row.nb, 0)
+                                                    .toFixed(2)}
                                             </td>
                                             <td className="text-right p-3">
-                                                {monthlySummary.reduce((sum, row) => sum + row.po, 0).toFixed(2)}
+                                                {monthlySummary
+                                                    .reduce((sum, row) => sum + row.po, 0)
+                                                    .toFixed(2)}
                                             </td>
                                             <td className="text-right p-3">
-                                                {monthlySummary.reduce((sum, row) => sum + row.nb + row.po, 0).toFixed(2)}
+                                                {monthlySummary
+                                                    .reduce((sum, row) => sum + row.nb + row.po, 0)
+                                                    .toFixed(2)}
                                             </td>
                                         </tr>
                                     </tfoot>
@@ -1352,4 +1208,3 @@ export function DailyActivitySheet() {
         </div>
     )
 }
-

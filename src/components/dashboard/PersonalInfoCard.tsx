@@ -1,16 +1,25 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
+import { useTeacherStore } from "@/store/teacher"
+import { useDailyActivityRecords } from "@/api/daily-activity-records"
 
 interface PersonalInfoCardProps {
     className?: string
 }
 
 export function PersonalInfoCard({ className }: PersonalInfoCardProps) {
+    const teacher = useTeacherStore()
+    const { data: records } = useDailyActivityRecords({
+        teacherId: teacher.externalTeacherId ?? 0,
+    })
+
+    const latest = records?.[records.length - 1]
+
     const infoData = [
-        { label: "Name", value: "Popescu Maria" },
-        { label: "Position", value: "Associate Professor" },
-        { label: "Department", value: "Computer Science" },
-        { label: "Faculty", value: "Faculty of Engineering and Technology" },
+        { label: "Name", value: teacher.fullName ?? "—" },
+        { label: "Email", value: teacher.email ?? "—" },
+        { label: "Department", value: latest?.departmentName ?? teacher.department ?? "—" },
+        { label: "Faculty", value: latest?.facultyName ?? "—" },
     ]
 
     return (
@@ -28,7 +37,7 @@ export function PersonalInfoCard({ className }: PersonalInfoCardProps) {
                                 {item.label}
                             </div>
                             <div className="font-medium">
-                                {item.value}
+                                {item.value || "—"}
                             </div>
                         </div>
                     ))}
@@ -37,4 +46,3 @@ export function PersonalInfoCard({ className }: PersonalInfoCardProps) {
         </Card>
     )
 }
-
