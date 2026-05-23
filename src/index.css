@@ -138,6 +138,21 @@ button {
   font: inherit;
 }
 
+/* Tailwind v4 preflight dropped the default `cursor: pointer` on buttons.
+   Restore it for every clickable element so the UI feels right; switch back
+   to the default arrow when the control is disabled. */
+button,
+[role="button"],
+label[for],
+summary {
+  cursor: pointer;
+}
+button:disabled,
+[role="button"][aria-disabled="true"],
+[role="button"]:disabled {
+  cursor: default;
+}
+
 input,
 select,
 textarea {

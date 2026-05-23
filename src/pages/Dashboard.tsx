@@ -82,17 +82,6 @@ export function Dashboard() {
           summary={monthAgg}
           status="Draft"
           onOpen={() => navigate("/activity-sheet")}
-          onDownloadPdf={
-            externalTeacherId
-              ? () =>
-                  exportMutation.mutate({
-                    teacherId: externalTeacherId,
-                    year: today.getFullYear(),
-                    month: today.getMonth() + 1,
-                  })
-              : undefined
-          }
-          downloadDisabled={!externalTeacherId || exportMutation.isPending}
         />
         <SupplementaryMiniCard
           year={today.getFullYear()}
@@ -104,7 +93,6 @@ export function Dashboard() {
           summaries={monthlySummaries}
           loading={monthsLoading}
           error={monthsError}
-          onOpenMonth={() => navigate("/activity-sheet")}
           onDownloadPdf={
             externalTeacherId
               ? (year, month) =>

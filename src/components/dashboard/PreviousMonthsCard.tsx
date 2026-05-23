@@ -1,7 +1,6 @@
-import { ChevronRightIcon, DownloadIcon } from "lucide-react"
+import { DownloadIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle } from "@/components/ui/card"
-import { StatusBadge } from "@/components/common/StatusBadge"
 import { MONTHS_RO } from "@/utils/dates"
 import type { MonthlyActivitySummary } from "@/api/daily-activity-records"
 
@@ -9,7 +8,6 @@ interface PreviousMonthsCardProps {
   summaries: MonthlyActivitySummary[] | undefined
   loading?: boolean
   error?: boolean
-  onOpenMonth: (year: number, month: number) => void
   onDownloadPdf?: (year: number, month: number) => void
   downloadDisabled?: boolean
 }
@@ -18,7 +16,6 @@ export function PreviousMonthsCard({
   summaries,
   loading,
   error,
-  onOpenMonth,
   onDownloadPdf,
   downloadDisabled,
 }: PreviousMonthsCardProps) {
@@ -29,7 +26,7 @@ export function PreviousMonthsCard({
   return (
     <Card className="col-span-2">
       <CardHeader>
-        <CardTitle className="flex-1">Luni anterioare</CardTitle>
+        <CardTitle className="flex-1">Fișele lunare</CardTitle>
       </CardHeader>
       {loading ? (
         <div className="px-4 py-6 text-center text-[12.5px] text-text-muted">Se încarcă…</div>
@@ -48,10 +45,9 @@ export function PreviousMonthsCard({
               <th className="px-3 py-2.5 text-left" style={{ width: "30%" }}>
                 Lună
               </th>
-              <th className="px-3 py-2.5 text-left">Status</th>
               <th className="px-3 py-2.5 text-right">Înregistrări</th>
               <th className="px-3 py-2.5 text-right">Total convenționale</th>
-              <th className="px-3 py-2.5" style={{ width: 80 }} />
+              <th className="px-3 py-2.5" style={{ width: 160 }} />
             </tr>
           </thead>
           <tbody>
@@ -61,35 +57,20 @@ export function PreviousMonthsCard({
                   <span className="font-medium">{MONTHS_RO[m.month - 1]}</span>{" "}
                   <span className="font-mono tnum text-text-muted">{m.year}</span>
                 </td>
-                <td className="px-3 py-2.5">
-                  <StatusBadge status={m.status} />
-                </td>
                 <td className="px-3 py-2.5 text-right font-mono tnum">{m.recordCount}</td>
                 <td className="px-3 py-2.5 text-right font-mono tnum font-semibold">
                   {m.totalConventionalHours.toFixed(1)}
                 </td>
                 <td className="px-3 py-2.5 text-right">
-                  <div className="inline-flex items-center gap-1">
-                    {onDownloadPdf && (
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => onDownloadPdf(m.year, m.month)}
-                        disabled={downloadDisabled}
-                        aria-label="Descarcă PDF"
-                        title="Descarcă PDF"
-                      >
-                        <DownloadIcon className="size-3" />
-                      </Button>
-                    )}
+                  {onDownloadPdf && (
                     <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => onOpenMonth(m.year, m.month - 1)}
+                      variant="default"
+                      onClick={() => onDownloadPdf(m.year, m.month)}
+                      disabled={downloadDisabled}
                     >
-                      Deschide <ChevronRightIcon className="size-3" />
+                      <DownloadIcon className="size-3" /> Descarcă PDF
                     </Button>
-                  </div>
+                  )}
                 </td>
               </tr>
             ))}
