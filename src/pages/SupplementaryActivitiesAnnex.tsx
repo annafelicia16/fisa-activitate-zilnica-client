@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { format } from "date-fns"
 import { Badge } from "@/components/ui/badge"
 import { Toast } from "@/components/ui/toast"
+import { useConfirm } from "@/components/ui/confirm-dialog"
 import { Breadcrumb } from "@/components/common/Breadcrumb"
 import { SupplementaryCalendar } from "@/components/supplementary/SupplementaryCalendar"
 import { SupplementaryEntriesList } from "@/components/supplementary/SupplementaryEntriesList"
@@ -45,6 +46,7 @@ function entryToForm(entry: SupplementaryActivity): SupplementaryFormData {
 
 export function SupplementaryActivitiesAnnex() {
   const navigate = useNavigate()
+  const confirm = useConfirm()
   const teacher = useTeacherStore()
   const externalTeacherId = teacher.externalTeacherId ?? 0
 
@@ -95,8 +97,16 @@ export function SupplementaryActivitiesAnnex() {
     setDirty(true)
   }
 
-  function pickDate(date: Date) {
-    if (dirty && !window.confirm("Aveți modificări nesalvate. Schimbați data?")) return
+  async function pickDate(date: Date) {
+    if (
+      dirty &&
+      !(await confirm({
+        title: "Modificări nesalvate",
+        description: "Schimbați data? Modificările din formular se vor pierde.",
+        confirmLabel: "Schimbă data",
+      }))
+    )
+      return
     setSelectedDate(date)
     setForm(seedForm(date))
     setEditingId(null)
@@ -109,8 +119,16 @@ export function SupplementaryActivitiesAnnex() {
     setDirty(false)
   }
 
-  function handleNew() {
-    if (dirty && !window.confirm("Aveți modificări nesalvate. Renunțați la ele?")) return
+  async function handleNew() {
+    if (
+      dirty &&
+      !(await confirm({
+        title: "Modificări nesalvate",
+        description: "Renunțați la modificările din formular?",
+        confirmLabel: "Renunță",
+      }))
+    )
+      return
     setForm(seedForm(selectedDate))
     setEditingId(null)
     setDirty(false)
@@ -154,7 +172,15 @@ export function SupplementaryActivitiesAnnex() {
 
   async function handleDelete() {
     if (!editingId) return
-    if (!window.confirm("Ștergeți definitiv această activitate?")) return
+    if (
+      !(await confirm({
+        title: "Ștergeți activitatea?",
+        description: "Această activitate complementară va fi ștearsă definitiv.",
+        confirmLabel: "Șterge",
+        variant: "destructive",
+      }))
+    )
+      return
     try {
       await deleteMutation.mutateAsync(editingId)
       setForm(seedForm(selectedDate))

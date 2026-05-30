@@ -64,14 +64,14 @@ export function Login() {
             F
           </span>
           <span>Fișa zilnică</span>
-          <small className="text-[11px] font-normal text-text-muted">· USV</small>
+          <small className="text-[11px] font-normal text-text-muted">· UNITBV</small>
         </div>
 
         <div className="grid flex-1 place-items-center">
           <form onSubmit={handleSubmit} className="w-full max-w-[360px]">
             <h1 className="text-[22px] font-semibold tracking-[-0.018em]">Autentificare</h1>
             <p className="mt-1.5 text-[13px] text-text-muted">
-              Folosiți adresa de email instituțională. Se va crea o sesiune locală pentru această sesiune.
+              Folosiți adresa de email instituțională. Se va crea o sesiune locală.
             </p>
 
             <div className="mt-6">
@@ -85,7 +85,7 @@ export function Login() {
                     type="email"
                     autoComplete="email"
                     autoFocus
-                    placeholder="prenume.nume@usv.ro"
+                    placeholder="prenume.nume@unitbv.ro"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     disabled={submitting}
@@ -114,17 +114,12 @@ export function Login() {
                   </>
                 )}
               </Button>
-
-              <hr className="my-3.5 border-border" />
-              <p className="text-[11.5px] leading-relaxed text-text-muted">
-                Verificarea se face automat în registrul AGSIS. Dacă adresa nu este recunoscută, contactați secretariatul facultății.
-              </p>
             </div>
           </form>
         </div>
 
         <div className="flex items-center gap-3 text-[11px] text-text-faint">
-          <span>© 2026 Universitatea „Ștefan cel Mare” Suceava</span>
+          <span>© 2026 Universitatea Transilvania din Brașov</span>
           <span className="ml-auto">v2.0 · 2026.05</span>
         </div>
       </div>

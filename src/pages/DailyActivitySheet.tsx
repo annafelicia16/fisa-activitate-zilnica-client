@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
+import { CalendarCheckIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Toast } from "@/components/ui/toast"
+import { useConfirm } from "@/components/ui/confirm-dialog"
 import { Breadcrumb } from "@/components/common/Breadcrumb"
 import type { DayDotStatus } from "@/components/common/DayDot"
 import { ActivityCalendar } from "@/components/activity-sheet/ActivityCalendar"
@@ -20,6 +23,7 @@ import {
   slotToForm,
 } from "@/components/activity-sheet/form-helpers"
 import {
+  useAutoFillDailyActivityRecords,
   useCreateDailyActivityRecord,
   useDailyActivityRecords,
   useDayStatuses,
@@ -36,6 +40,7 @@ import { conventionalHours } from "@/utils/activity"
 
 export function DailyActivitySheet() {
   const navigate = useNavigate()
+  const confirm = useConfirm()
   const teacher = useTeacherStore()
   const externalTeacherId = teacher.externalTeacherId ?? 0
   const today = useMemo(() => new Date(), [])
@@ -77,8 +82,23 @@ export function DailyActivitySheet() {
 
   const createMutation = useCreateDailyActivityRecord()
   const updateMutation = useUpdateDailyActivityRecord()
+  const autoFillMutation = useAutoFillDailyActivityRecords()
   const exportMutation = useDownloadMonthlyActivitySheet()
   const saving = createMutation.isPending || updateMutation.isPending
+
+  // Auto-fill targets the displayed calendar month: from the 1st to the last day,
+  // but never past today (a past month fills entirely; the current month fills up
+  // to today; a month wholly in the future has nothing to do).
+  const monthFirst = useMemo(
+    () => new Date(calMonth.year, calMonth.month, 1),
+    [calMonth.year, calMonth.month],
+  )
+  const monthLast = useMemo(
+    () => new Date(calMonth.year, calMonth.month + 1, 0),
+    [calMonth.year, calMonth.month],
+  )
+  const autoFillEnd = monthLast < today ? monthLast : today
+  const isFutureMonth = monthFirst > today
 
   const recordsByDate = useMemo(() => {
     const map = new Map<string, DailyActivityRecord[]>()
@@ -114,8 +134,16 @@ export function DailyActivitySheet() {
     setDirty(true)
   }
 
-  function pickDate(date: Date) {
-    if (dirty && !window.confirm("Aveți modificări nesalvate. Schimbați data?")) return
+  async function pickDate(date: Date) {
+    if (
+      dirty &&
+      !(await confirm({
+        title: "Modificări nesalvate",
+        description: "Schimbați data? Modificările din formular se vor pierde.",
+        confirmLabel: "Schimbă data",
+      }))
+    )
+      return
     setSelectedDate(date)
     setForm(seedForm(date, teacher.department))
     setEditingId(null)
@@ -128,10 +156,15 @@ export function DailyActivitySheet() {
     setDirty(false)
   }
 
-  function handleFillFromSlot(slot: TeacherScheduleSlot) {
+  async function handleFillFromSlot(slot: TeacherScheduleSlot) {
     if (
       dirty &&
-      !window.confirm("Aveți modificări nesalvate în formular. Înlocuiți cu această oră programată?")
+      !(await confirm({
+        title: "Modificări nesalvate",
+        description:
+          "Înlocuiți formularul curent cu această oră programată? Modificările nesalvate se vor pierde.",
+        confirmLabel: "Înlocuiește",
+      }))
     ) {
       return
     }
@@ -159,11 +192,52 @@ export function DailyActivitySheet() {
     }
   }
 
-  function handleNew() {
-    if (dirty && !window.confirm("Aveți modificări nesalvate. Renunțați la ele?")) return
+  async function handleNew() {
+    if (
+      dirty &&
+      !(await confirm({
+        title: "Modificări nesalvate",
+        description: "Renunțați la modificările din formular?",
+        confirmLabel: "Renunță",
+      }))
+    )
+      return
     setForm(seedForm(selectedDate, teacher.department))
     setEditingId(null)
     setDirty(false)
+  }
+
+  async function handleAutoFill() {
+    if (!externalTeacherId || autoFillMutation.isPending || isFutureMonth) return
+    const confirmed = await confirm({
+      title: `Completează ${MONTHS_RO[calMonth.month]} automat`,
+      description: `Se vor genera automat înregistrările lipsă din orar pentru ${MONTHS_RO[calMonth.month]} ${calMonth.year}, până azi. Înregistrările existente nu sunt modificate.`,
+      confirmLabel: "Completează",
+    })
+    if (!confirmed) return
+    try {
+      const result = await autoFillMutation.mutateAsync({
+        externalTeacherId,
+        startDate: ymd(monthFirst),
+        endDate: ymd(autoFillEnd),
+        departmentName: teacher.department || null,
+      })
+      if (result.createdCount === 0) {
+        setToast(
+          result.skippedCount > 0
+            ? `Nimic de completat · ${result.skippedCount} ore programate nu au putut fi completate automat.`
+            : "Toate orele programate sunt deja înregistrate.",
+        )
+      } else {
+        setToast(
+          `${result.createdCount} înregistrări completate automat` +
+            (result.skippedCount > 0 ? ` · ${result.skippedCount} omise` : "") +
+            ".",
+        )
+      }
+    } catch {
+      setToast("Eroare la completarea automată.")
+    }
   }
 
   function handleExport() {
@@ -209,6 +283,22 @@ export function DailyActivitySheet() {
             onNext={() => setCalMonth((m) => shiftMonth(m, +1))}
             onPickDate={pickDate}
           />
+          <Button
+            variant="default"
+            className="w-full"
+            onClick={handleAutoFill}
+            disabled={autoFillMutation.isPending || isFutureMonth || !externalTeacherId}
+            title={
+              isFutureMonth
+                ? "Luna selectată este în viitor."
+                : `Generează automat înregistrările lipsă din ${MONTHS_RO[calMonth.month]} ${calMonth.year} (până azi), pe baza orarului.`
+            }
+          >
+            <CalendarCheckIcon className="size-3.5" />
+            {autoFillMutation.isPending
+              ? "Se completează…"
+              : `Completează ${MONTHS_RO[calMonth.month]} Automat`}
+          </Button>
           <EntriesForDateList
             date={selectedDate}
             records={dayEntries}

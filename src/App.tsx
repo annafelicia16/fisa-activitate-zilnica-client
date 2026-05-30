@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
 import { QueryClientProvider } from "@tanstack/react-query"
+import { ConfirmProvider } from "./components/ui/confirm-dialog"
 import { AppShell } from "./components/layout/AppShell"
 import { RequireTeacher } from "./components/auth/RequireTeacher"
 import { Admin } from "./pages/Admin"
@@ -20,41 +21,43 @@ function AuthedShell({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/" element={<AuthedShell><Dashboard /></AuthedShell>} />
-          <Route
-            path="/activity-sheet"
-            element={
-              <AuthedShell>
-                <DailyActivitySheet />
-              </AuthedShell>
-            }
-          />
-          <Route
-            path="/activity-sheet/new"
-            element={<Navigate to="/activity-sheet" replace />}
-          />
-          <Route
-            path="/supplementary-annex"
-            element={
-              <AuthedShell>
-                <SupplementaryActivitiesAnnex />
-              </AuthedShell>
-            }
-          />
-          <Route
-            path="/admin/schedules"
-            element={
-              <AuthedShell>
-                <Admin />
-              </AuthedShell>
-            }
-          />
-          <Route path="/admin" element={<Navigate to="/admin/schedules" replace />} />
-        </Routes>
-      </BrowserRouter>
+      <ConfirmProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/" element={<AuthedShell><Dashboard /></AuthedShell>} />
+            <Route
+              path="/activity-sheet"
+              element={
+                <AuthedShell>
+                  <DailyActivitySheet />
+                </AuthedShell>
+              }
+            />
+            <Route
+              path="/activity-sheet/new"
+              element={<Navigate to="/activity-sheet" replace />}
+            />
+            <Route
+              path="/supplementary-annex"
+              element={
+                <AuthedShell>
+                  <SupplementaryActivitiesAnnex />
+                </AuthedShell>
+              }
+            />
+            <Route
+              path="/admin/schedules"
+              element={
+                <AuthedShell>
+                  <Admin />
+                </AuthedShell>
+              }
+            />
+            <Route path="/admin" element={<Navigate to="/admin/schedules" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </ConfirmProvider>
     </QueryClientProvider>
   )
 }

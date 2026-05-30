@@ -52,7 +52,7 @@ export function TopBar() {
           F
         </span>
         <span>Fișa zilnică</span>
-        <small className="-ml-0.5 text-[11px] font-normal text-text-muted">· USV</small>
+        <small className="-ml-0.5 text-[11px] font-normal text-text-muted">· UNITBV</small>
       </div>
 
       <nav className="flex h-full min-w-0 flex-none items-center gap-px overflow-hidden">

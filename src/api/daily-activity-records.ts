@@ -61,6 +61,19 @@ export interface CreateDailyActivityRecordPayload {
   activitySlotId?: number | null
 }
 
+export interface AutoFillDailyActivityRecordsPayload {
+  externalTeacherId: number
+  startDate: string
+  endDate: string
+  departmentName?: string | null
+}
+
+export interface AutoFillDailyActivityRecordsResult {
+  createdCount: number
+  skippedCount: number
+  created: DailyActivityRecord[]
+}
+
 export interface UpdateDailyActivityRecordPayload {
   id: string
   departmentName?: string | null
@@ -143,6 +156,16 @@ async function createRecord(
   payload: CreateDailyActivityRecordPayload,
 ): Promise<DailyActivityRecord> {
   const { data } = await apiClient.post<DailyActivityRecord>(`${RESOURCE}/create`, payload)
+  return data
+}
+
+async function autoFillRecords(
+  payload: AutoFillDailyActivityRecordsPayload,
+): Promise<AutoFillDailyActivityRecordsResult> {
+  const { data } = await apiClient.post<AutoFillDailyActivityRecordsResult>(
+    `${RESOURCE}/auto-fill`,
+    payload,
+  )
   return data
 }
 
@@ -232,6 +255,17 @@ export function useCreateDailyActivityRecord() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: createRecord,
+    onSuccess: () => invalidateRecordCaches(qc),
+  })
+}
+
+// Bulk-generates records from the schedule for a date range. Invalidates both
+// the record caches and the schedule slot caches (the just-filled slots drop out
+// of the "Programat" lists).
+export function useAutoFillDailyActivityRecords() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: autoFillRecords,
     onSuccess: () => invalidateRecordCaches(qc),
   })
 }

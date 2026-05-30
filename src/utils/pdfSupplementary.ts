@@ -31,7 +31,7 @@ export async function exportSupplementaryAnnexPdf(params: ExportParams): Promise
 
   doc.setFont(PDF_FONT_NAME, "normal")
   doc.setFontSize(11)
-  doc.text('UNIVERSITATEA „ȘTEFAN CEL MARE" DIN SUCEAVA', pageWidth / 2, 15, { align: "center" })
+  doc.text("UNIVERSITATEA TRANSILVANIA DIN BRAȘOV", pageWidth / 2, 15, { align: "center" })
   doc.text(
     teacher.department ? `Departamentul ${teacher.department}` : "Departamentul ……………………………",
     pageWidth / 2,
