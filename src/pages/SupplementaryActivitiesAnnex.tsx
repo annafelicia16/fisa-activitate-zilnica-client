@@ -20,9 +20,9 @@ import {
   useUpdateSupplementaryActivity,
   type SupplementaryActivity,
 } from "@/api/supplementary-activities"
+import { useUploadSupplementaryAttachments } from "@/api/supplementary-activity-attachments"
 import { useTeacherStore } from "@/store/teacher"
 import { MONTHS_RO, shiftMonth, ymd } from "@/utils/dates"
-import { exportSupplementaryAnnexPdf } from "@/utils/pdfSupplementary"
 
 const EMPTY_FORM: SupplementaryFormData = {
   date: "",
@@ -60,6 +60,10 @@ export function SupplementaryActivitiesAnnex() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  // Files dropped in the form but not yet uploaded — they upload after the
+  // activity is saved (the id must exist first). Outside the form state so
+  // resets don't have to reason about them.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
 
   const { data: entries = [] } = useSupplementaryActivities({
     teacherId: externalTeacherId,
@@ -67,8 +71,12 @@ export function SupplementaryActivitiesAnnex() {
   const createMutation = useCreateSupplementaryActivity()
   const updateMutation = useUpdateSupplementaryActivity()
   const deleteMutation = useDeleteSupplementaryActivity()
+  const uploadAttachmentsMutation = useUploadSupplementaryAttachments()
   const saving =
-    createMutation.isPending || updateMutation.isPending || deleteMutation.isPending
+    createMutation.isPending ||
+    updateMutation.isPending ||
+    deleteMutation.isPending ||
+    uploadAttachmentsMutation.isPending
 
   const entriesByDate = useMemo(() => {
     const map = new Map<string, SupplementaryActivity[]>()
@@ -111,12 +119,14 @@ export function SupplementaryActivitiesAnnex() {
     setForm(seedForm(date))
     setEditingId(null)
     setDirty(false)
+    setPendingFiles([])
   }
 
   function handleEdit(entry: SupplementaryActivity) {
     setForm(entryToForm(entry))
     setEditingId(entry.id)
     setDirty(false)
+    setPendingFiles([])
   }
 
   async function handleNew() {
@@ -132,6 +142,7 @@ export function SupplementaryActivitiesAnnex() {
     setForm(seedForm(selectedDate))
     setEditingId(null)
     setDirty(false)
+    setPendingFiles([])
   }
 
   async function handleSave() {
@@ -142,6 +153,9 @@ export function SupplementaryActivitiesAnnex() {
       return
     }
     const isoDate = new Date(`${form.date}T00:00:00`).toISOString()
+
+    let activityId: string
+    let savedMessage: string
     try {
       if (editingId) {
         await updateMutation.mutateAsync({
@@ -151,23 +165,46 @@ export function SupplementaryActivitiesAnnex() {
           observations: form.observations || null,
           totalHours: hours,
         })
-        setToast("Activitate actualizată.")
+        activityId = editingId
+        savedMessage = "Activitate actualizată."
       } else {
-        await createMutation.mutateAsync({
+        const created = await createMutation.mutateAsync({
           externalTeacherId,
           date: isoDate,
           activityType: form.type,
           observations: form.observations || null,
           totalHours: hours,
         })
-        setToast("Activitate salvată.")
+        activityId = created.id
+        savedMessage = "Activitate salvată."
       }
-      setForm(seedForm(selectedDate))
-      setEditingId(null)
-      setDirty(false)
     } catch {
       setToast("Eroare la salvare.")
+      return
     }
+
+    // The activity is persisted; now upload any pending files against its id.
+    // On failure the form switches to edit mode with the files still pending,
+    // so pressing Salvează again retries (update + re-upload).
+    if (pendingFiles.length > 0) {
+      try {
+        await uploadAttachmentsMutation.mutateAsync({ activityId, files: pendingFiles })
+        savedMessage += ` ${pendingFiles.length} fișier${pendingFiles.length === 1 ? "" : "e"} încărcat${pendingFiles.length === 1 ? "" : "e"}.`
+      } catch {
+        setEditingId(activityId)
+        setDirty(false)
+        setToast(
+          "Activitatea a fost salvată, dar fișierele nu au putut fi încărcate. Apăsați Salvează pentru a reîncerca.",
+        )
+        return
+      }
+    }
+
+    setToast(savedMessage)
+    setForm(seedForm(selectedDate))
+    setEditingId(null)
+    setDirty(false)
+    setPendingFiles([])
   }
 
   async function handleDelete() {
@@ -186,23 +223,11 @@ export function SupplementaryActivitiesAnnex() {
       setForm(seedForm(selectedDate))
       setEditingId(null)
       setDirty(false)
+      setPendingFiles([])
       setToast("Activitate ștearsă.")
     } catch {
       setToast("Eroare la ștergere.")
     }
-  }
-
-  async function handleExport() {
-    await exportSupplementaryAnnexPdf({
-      entries,
-      teacher: {
-        fullName: teacher.fullName ?? teacher.teacherName ?? "",
-        department: teacher.department ?? "",
-        academicYear: teacher.academicYear ?? "",
-      },
-      year: calMonth.year,
-      month: calMonth.month,
-    })
   }
 
   return (
@@ -241,11 +266,19 @@ export function SupplementaryActivitiesAnnex() {
           dirty={dirty}
           editingId={editingId}
           saving={saving}
+          pendingFiles={pendingFiles}
           onChange={updateForm}
           onNew={handleNew}
           onSave={handleSave}
           onDelete={editingId ? handleDelete : undefined}
-          onExport={handleExport}
+          onAddFiles={(files) => {
+            setPendingFiles((prev) => [...prev, ...files])
+            setDirty(true)
+          }}
+          onRemovePendingFile={(index) =>
+            setPendingFiles((prev) => prev.filter((_, i) => i !== index))
+          }
+          onNotify={setToast}
         />
       </div>
       <div className="mx-auto grid w-full max-w-[1600px] grid-cols-2 gap-4 px-6 pb-6 pt-2">

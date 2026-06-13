@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
+import { format } from "date-fns"
 import { CalendarCheckIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -16,6 +17,7 @@ import {
 } from "@/components/activity-sheet/ActivityRecordForm"
 import { MonthlySummaryTable } from "@/components/activity-sheet/MonthlySummaryTable"
 import {
+  DEFAULT_FACULTY,
   EMPTY_FORM,
   formToPayload,
   recordToForm,
@@ -27,11 +29,13 @@ import {
   useCreateDailyActivityRecord,
   useDailyActivityRecords,
   useDayStatuses,
+  useDeleteDailyActivityRecord,
   useUpdateDailyActivityRecord,
   type DailyActivityRecord,
   type DayStatus,
 } from "@/api/daily-activity-records"
 import { aggregateMonth } from "@/api/types"
+import { useUploadAttachments } from "@/api/daily-activity-record-attachments"
 import { useTeacherDaySlotsByDate, type TeacherScheduleSlot } from "@/api/schedules"
 import { useDownloadMonthlyActivitySheet } from "@/api/export"
 import { useTeacherStore } from "@/store/teacher"
@@ -50,12 +54,14 @@ export function DailyActivitySheet() {
     year: today.getFullYear(),
     month: today.getMonth(),
   })
-  const [form, setForm] = useState<ActivityFormData>(() =>
-    seedForm(today, teacher.department),
-  )
+  const [form, setForm] = useState<ActivityFormData>(() => seedForm(today))
   const [editingId, setEditingId] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  // Files dropped in the form but not yet uploaded — they upload after the
+  // record is saved (the record id must exist first). Deliberately outside the
+  // form state so slot fills / form resets don't have to reason about them.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
 
   const { data: records = [] } = useDailyActivityRecords({ teacherId: externalTeacherId })
   const { data: scheduleSlots = [], isLoading: slotsLoading } = useTeacherDaySlotsByDate(
@@ -82,9 +88,14 @@ export function DailyActivitySheet() {
 
   const createMutation = useCreateDailyActivityRecord()
   const updateMutation = useUpdateDailyActivityRecord()
+  const deleteMutation = useDeleteDailyActivityRecord()
   const autoFillMutation = useAutoFillDailyActivityRecords()
+  const uploadAttachmentsMutation = useUploadAttachments()
   const exportMutation = useDownloadMonthlyActivitySheet()
-  const saving = createMutation.isPending || updateMutation.isPending
+  const saving =
+    createMutation.isPending ||
+    updateMutation.isPending ||
+    uploadAttachmentsMutation.isPending
 
   // Auto-fill targets the displayed calendar month: from the 1st to the last day,
   // but never past today (a past month fills entirely; the current month fills up
@@ -145,15 +156,41 @@ export function DailyActivitySheet() {
     )
       return
     setSelectedDate(date)
-    setForm(seedForm(date, teacher.department))
+    setForm(seedForm(date))
     setEditingId(null)
     setDirty(false)
+    setPendingFiles([])
   }
 
   function handleEditRecord(record: DailyActivityRecord) {
     setForm(recordToForm(record))
     setEditingId(record.id)
     setDirty(false)
+    setPendingFiles([])
+  }
+
+  async function handleDeleteRecord(record: DailyActivityRecord) {
+    if (deleteMutation.isPending) return
+    const time = format(new Date(record.startDate), "HH:mm")
+    const confirmed = await confirm({
+      title: "Ștergeți înregistrarea?",
+      description: `„${record.subjectName}" (${time}, ${record.conventionalHours.toFixed(1)}h conv.) va fi ștearsă definitiv.`,
+      confirmLabel: "Șterge",
+    })
+    if (!confirmed) return
+    try {
+      await deleteMutation.mutateAsync(record.id)
+      // If the deleted record was open in the form, reset to a fresh one.
+      if (editingId === record.id) {
+        setForm(seedForm(selectedDate))
+        setEditingId(null)
+        setDirty(false)
+        setPendingFiles([])
+      }
+      setToast("Înregistrare ștearsă.")
+    } catch {
+      setToast("Eroare la ștergerea înregistrării.")
+    }
   }
 
   async function handleFillFromSlot(slot: TeacherScheduleSlot) {
@@ -176,20 +213,46 @@ export function DailyActivitySheet() {
   async function handleSave() {
     if (!externalTeacherId) return
     const payload = formToPayload(form, externalTeacherId, teacher.department)
+
+    let recordId: string
+    let savedMessage: string
     try {
       if (editingId) {
         await updateMutation.mutateAsync({ id: editingId, ...payload })
-        setToast("Înregistrare actualizată.")
+        recordId = editingId
+        savedMessage = "Înregistrare actualizată."
       } else {
-        await createMutation.mutateAsync(payload)
-        setToast("Înregistrare salvată.")
+        const created = await createMutation.mutateAsync(payload)
+        recordId = created.id
+        savedMessage = "Înregistrare salvată."
       }
-      setDirty(false)
-      setForm({ ...EMPTY_FORM, date: form.date, faculty: teacher.department })
-      setEditingId(null)
     } catch {
       setToast("Eroare la salvare.")
+      return
     }
+
+    // The record is persisted; now upload any pending files against its id. On
+    // failure the form switches to edit mode with the files still pending, so
+    // pressing Salvează again retries (update + re-upload).
+    if (pendingFiles.length > 0) {
+      try {
+        await uploadAttachmentsMutation.mutateAsync({ recordId, files: pendingFiles })
+        savedMessage += ` ${pendingFiles.length} fișier${pendingFiles.length === 1 ? "" : "e"} încărcat${pendingFiles.length === 1 ? "" : "e"}.`
+      } catch {
+        setEditingId(recordId)
+        setDirty(false)
+        setToast(
+          "Înregistrarea a fost salvată, dar fișierele nu au putut fi încărcate. Apăsați Salvează pentru a reîncerca.",
+        )
+        return
+      }
+    }
+
+    setToast(savedMessage)
+    setDirty(false)
+    setForm({ ...EMPTY_FORM, date: form.date, faculty: DEFAULT_FACULTY })
+    setEditingId(null)
+    setPendingFiles([])
   }
 
   async function handleNew() {
@@ -202,9 +265,10 @@ export function DailyActivitySheet() {
       }))
     )
       return
-    setForm(seedForm(selectedDate, teacher.department))
+    setForm(seedForm(selectedDate))
     setEditingId(null)
     setDirty(false)
+    setPendingFiles([])
   }
 
   async function handleAutoFill() {
@@ -304,6 +368,7 @@ export function DailyActivitySheet() {
             records={dayEntries}
             editingId={editingId}
             onEdit={handleEditRecord}
+            onDelete={handleDeleteRecord}
           />
           <ScheduledSlotsList
             date={selectedDate}
@@ -318,9 +383,18 @@ export function DailyActivitySheet() {
           dirty={dirty}
           editingId={editingId}
           saving={saving}
+          pendingFiles={pendingFiles}
           onChange={updateForm}
           onNew={handleNew}
           onSave={handleSave}
+          onAddFiles={(files) => {
+            setPendingFiles((prev) => [...prev, ...files])
+            setDirty(true)
+          }}
+          onRemovePendingFile={(index) =>
+            setPendingFiles((prev) => prev.filter((_, i) => i !== index))
+          }
+          onNotify={setToast}
         />
       </div>
 

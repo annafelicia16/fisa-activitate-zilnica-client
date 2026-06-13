@@ -1,4 +1,4 @@
-import { DownloadIcon, PlusIcon, SaveIcon, Trash2Icon } from "lucide-react"
+import { PlusIcon, SaveIcon, Trash2Icon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -13,6 +13,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { Affix, AffixInput, InputAffix } from "@/components/ui/input-affix"
 import { Field } from "@/components/common/Field"
+import { SupplementaryAttachmentsArea } from "@/components/supplementary/SupplementaryAttachmentsArea"
 import { fmtDateInput } from "@/utils/dates"
 import { SUPP_TYPES } from "./supp-types"
 
@@ -28,11 +29,16 @@ interface SupplementaryActivityFormProps {
   dirty: boolean
   editingId: string | null
   saving?: boolean
+  // Files picked but not yet uploaded — they live in page state (not form
+  // state) and upload after the activity is saved.
+  pendingFiles: File[]
   onChange: (patch: Partial<SupplementaryFormData>) => void
   onNew: () => void
   onSave: () => void
   onDelete?: () => void
-  onExport?: () => void
+  onAddFiles: (files: File[]) => void
+  onRemovePendingFile: (index: number) => void
+  onNotify: (message: string) => void
 }
 
 export function SupplementaryActivityForm({
@@ -40,11 +46,14 @@ export function SupplementaryActivityForm({
   dirty,
   editingId,
   saving,
+  pendingFiles,
   onChange,
   onNew,
   onSave,
   onDelete,
-  onExport,
+  onAddFiles,
+  onRemovePendingFile,
+  onNotify,
 }: SupplementaryActivityFormProps) {
   return (
     <Card className="flex flex-col">
@@ -96,6 +105,15 @@ export function SupplementaryActivityForm({
             />
           </Field>
         </div>
+        <div className="col-span-3">
+          <SupplementaryAttachmentsArea
+            editingId={editingId}
+            pendingFiles={pendingFiles}
+            onAddFiles={onAddFiles}
+            onRemovePending={onRemovePendingFile}
+            onNotify={onNotify}
+          />
+        </div>
       </CardContent>
       <div className="flex items-center gap-2 border-t border-border bg-surface-2 px-4 py-3">
         {onDelete && editingId && (
@@ -104,11 +122,6 @@ export function SupplementaryActivityForm({
           </Button>
         )}
         <div className="flex-1" />
-        {onExport && (
-          <Button variant="default" onClick={onExport}>
-            <DownloadIcon className="size-3" /> Exportă anexă
-          </Button>
-        )}
         <Button variant="primary" onClick={onSave} disabled={saving}>
           <SaveIcon className="size-3" /> {saving ? "Se salvează…" : "Salvează"}
         </Button>

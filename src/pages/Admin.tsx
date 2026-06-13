@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import axios from "axios"
 import { CheckIcon } from "lucide-react"
@@ -15,14 +15,25 @@ const INITIAL: ScheduleFormState = {
   name: "Orar 2025–2026 · Semestrul 2",
   year: "2025-2026",
   semester: "2",
-  startDate: new Date().toISOString().slice(0, 10),
-  endDate: (() => {
-    const d = new Date()
-    d.setMonth(d.getMonth() + 4)
-    return d.toISOString().slice(0, 10)
-  })(),
+  startDate: "2026-02-16",
+  endDate: "2026-06-26",
   oddFile: null,
   evenFile: null,
+}
+
+// Default .fet files served from public/dev — preloaded into the pickers so the
+// form can be submitted without picking files by hand. Missing files just leave
+// the pickers empty.
+const DEFAULT_FET_URLS = {
+  odd: "/dev/orarImpara_data_and_timetable.fet",
+  even: "/dev/orarPara_data_and_timetable.fet",
+}
+
+async function fetchFetFile(url: string): Promise<File> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`${url}: ${res.status}`)
+  const blob = await res.blob()
+  return new File([blob], url.split("/").pop() ?? "orar.fet", { type: "application/xml" })
 }
 
 function yearOf(value: string): number {
@@ -39,11 +50,38 @@ export function Admin() {
     isError: existingError,
   } = useAllSchedules()
   const [state, setState] = useState<ScheduleFormState>(INITIAL)
+  const [defaultFiles, setDefaultFiles] = useState<{ odd: File; even: File } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<{ scheduleId: number; slotCount?: number } | null>(null)
 
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([fetchFetFile(DEFAULT_FET_URLS.odd), fetchFetFile(DEFAULT_FET_URLS.even)])
+      .then(([odd, even]) => {
+        if (cancelled) return
+        setDefaultFiles({ odd, even })
+        setState((prev) => ({
+          ...prev,
+          oddFile: prev.oddFile ?? odd,
+          evenFile: prev.evenFile ?? even,
+        }))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   function patch(p: Partial<ScheduleFormState>) {
     setState((prev) => ({ ...prev, ...p }))
+  }
+
+  function resetForm() {
+    setState({
+      ...INITIAL,
+      oddFile: defaultFiles?.odd ?? null,
+      evenFile: defaultFiles?.even ?? null,
+    })
   }
 
   async function handleSubmit() {
@@ -97,7 +135,7 @@ export function Admin() {
           <ScheduleUploadForm
             state={state}
             onChange={patch}
-            onCancel={() => setState(INITIAL)}
+            onCancel={resetForm}
             onSubmit={handleSubmit}
             submitting={uploadMutation.isPending}
             error={error}

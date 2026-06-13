@@ -40,6 +40,7 @@ export interface DailyActivityRecord {
   startDate: string
   endDate: string
   activitySlotId: number | null
+  attachmentCount: number
 }
 
 export interface CreateDailyActivityRecordPayload {
@@ -246,7 +247,7 @@ export function useDailyActivityRecords(params: QueryDailyActivityRecordsParams)
 // record exists for a (subject, hour) on a date the backend removes that slot
 // from the scheduled-today list. Every record mutation has to invalidate both
 // sides so the calendar dots and slot list update without a manual refresh.
-function invalidateRecordCaches(qc: ReturnType<typeof useQueryClient>) {
+export function invalidateRecordCaches(qc: ReturnType<typeof useQueryClient>) {
   void qc.invalidateQueries({ queryKey: dailyActivityRecordKeys.all })
   void qc.invalidateQueries({ queryKey: scheduleKeys.all })
 }

@@ -1,3 +1,4 @@
+import { PaperclipIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardHeader, CardTitle } from "@/components/ui/card"
 import { fmtDateLong } from "@/utils/dates"
@@ -42,6 +43,15 @@ export function SupplementaryEntriesList({
           >
             <div className="flex items-center gap-2">
               <span className="text-[12.5px] font-medium">{e.activityType}</span>
+              {e.attachmentCount > 0 && (
+                <span
+                  title={`${e.attachmentCount} fișier${e.attachmentCount === 1 ? "" : "e"} atașat${e.attachmentCount === 1 ? "" : "e"}`}
+                  className="flex shrink-0 items-center gap-0.5 text-[10.5px] text-text-muted"
+                >
+                  <PaperclipIcon className="size-2.5" />
+                  {e.attachmentCount}
+                </span>
+              )}
               <span className="ml-auto font-mono tnum text-[12px]">
                 {e.totalHours.toFixed(1)} h
               </span>

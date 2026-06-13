@@ -1,4 +1,4 @@
-import { AlertTriangleIcon } from "lucide-react"
+import { AlertTriangleIcon, MinusIcon, PaperclipIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardHeader, CardTitle } from "@/components/ui/card"
 import { ActivityTag } from "@/components/common/ActivityTag"
@@ -15,6 +15,7 @@ interface EntriesForDateListProps {
   records: DailyActivityRecord[]
   editingId: string | null
   onEdit: (record: DailyActivityRecord) => void
+  onDelete: (record: DailyActivityRecord) => void
 }
 
 export function EntriesForDateList({
@@ -22,6 +23,7 @@ export function EntriesForDateList({
   records,
   editingId,
   onEdit,
+  onDelete,
 }: EntriesForDateListProps) {
   return (
     <Card>
@@ -52,12 +54,19 @@ export function EntriesForDateList({
             // empty) — they get a meta line without the group at all.
             const group = summaryGroup(r.groupName)
             return (
-              <button
+              <div
                 key={r.id}
-                type="button"
+                role="button"
+                tabIndex={0}
                 onClick={() => onEdit(r)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    onEdit(r)
+                  }
+                }}
                 className={cn(
-                  "block w-full border-t border-border px-3.5 py-2.5 text-left transition-colors",
+                  "block w-full cursor-pointer border-t border-border px-3.5 py-2.5 text-left transition-colors",
                   r.id === editingId ? "bg-brand-soft" : "hover:bg-hover",
                 )}
               >
@@ -67,9 +76,29 @@ export function EntriesForDateList({
                   <span className="grow truncate text-[12.5px] font-medium">
                     {r.subjectName}
                   </span>
+                  {r.attachmentCount > 0 && (
+                    <span
+                      title={`${r.attachmentCount} fișier${r.attachmentCount === 1 ? "" : "e"} atașat${r.attachmentCount === 1 ? "" : "e"}`}
+                      className="flex shrink-0 items-center gap-0.5 text-[10.5px] text-text-muted"
+                    >
+                      <PaperclipIcon className="size-2.5" />
+                      {r.attachmentCount}
+                    </span>
+                  )}
                   <span className="font-mono tnum text-[11.5px] font-medium">
                     {r.conventionalHours.toFixed(1)}h
                   </span>
+                  <button
+                    type="button"
+                    title="Șterge înregistrarea"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onDelete(r)
+                    }}
+                    className="grid h-5 w-5 place-items-center rounded-[--r-sm] border border-border bg-card text-text-muted transition-colors hover:border-st-warning hover:bg-st-warning-soft hover:text-st-warning"
+                  >
+                    <MinusIcon className="size-3" />
+                  </button>
                 </div>
                 <div className="flex gap-2 text-[11px] text-text-muted">
                   <span className="font-mono truncate">
@@ -93,7 +122,7 @@ export function EntriesForDateList({
                     fără observații
                   </div>
                 )}
-              </button>
+              </div>
             )
           })}
         </div>

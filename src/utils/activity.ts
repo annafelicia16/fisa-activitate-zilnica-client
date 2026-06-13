@@ -3,8 +3,8 @@ export type ActivityKind = "Curs" | "Seminar" | "Laborator" | "Proiect" | "Other
 export const ACTIVITY_KINDS: ActivityKind[] = ["Curs", "Seminar", "Laborator", "Proiect"]
 
 const MULTIPLIERS: Record<ActivityKind, number> = {
-  Curs: 2.5,
-  Seminar: 1.5,
+  Curs: 2.0,
+  Seminar: 1.0,
   Laborator: 1.0,
   Proiect: 1.0,
   Other: 1.0,

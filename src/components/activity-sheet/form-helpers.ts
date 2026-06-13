@@ -11,7 +11,7 @@ import {
   type ActivityKind,
 } from "@/utils/activity"
 import { ymd } from "@/utils/dates"
-import { displayGroup } from "@/utils/group"
+import { displayGroup, isWholeClassGroup } from "@/utils/group"
 import { formatSlotStartTime } from "@/utils/slot"
 import type { ActivityFormData } from "./ActivityRecordForm"
 
@@ -41,8 +41,13 @@ export const EMPTY_FORM: ActivityFormData = {
   activitySlotId: null,
 }
 
-export function seedForm(date: Date, teacherDept: string): ActivityFormData {
-  return { ...EMPTY_FORM, date: ymd(date), faculty: teacherDept }
+// Pre-selected faculty for new records. Must byte-match the AGSIS
+// dbo.Facultate.Denumire (SEAA) so the cascade recognizes it as a selected
+// option and unlocks the specialization field.
+export const DEFAULT_FACULTY = "Facultatea de Științe economice și administrarea afacerilor"
+
+export function seedForm(date: Date): ActivityFormData {
+  return { ...EMPTY_FORM, date: ymd(date), faculty: DEFAULT_FACULTY }
 }
 
 export function recordToForm(record: DailyActivityRecord): ActivityFormData {
@@ -74,17 +79,24 @@ export function slotToForm(
   const duration = slot.duration && slot.duration > 0 ? slot.duration : 1
   const conv = conventionalHours(duration, kind)
   const time = formatSlotStartTime(slot.hourName) ?? ""
-  // Group preference: backend-resolved AGSIS dbo.Grupe.Nume ("8MF141") →
-  // FET file's free-form name ("IE3") → raw external ID. The whole-class
-  // sentinel ("-1") and unresolved values get collapsed to "-" by displayGroup.
+  // Group preference: backend-resolved AGSIS dbo.Grupe.Nume ("8MF141") wins.
+  // Slots without one where idGrupa is the whole-class sentinel ("-1"/null)
+  // are lectures — their FET text is a series label ("MK1"), not a group, so
+  // they map to "-" (toată seria) and match the cascade's whole-class option.
+  // Anything else falls back to the FET name / raw external id.
   const fetGroup = slot.grupa?.split(",")[0]?.trim() ?? ""
+  const group = slot.grupaName
+    ? displayGroup(slot.grupaName)
+    : isWholeClassGroup(slot.idGrupa)
+      ? "-"
+      : displayGroup(fetGroup || slot.idGrupa || prev.group)
   return {
     ...prev,
     time,
     faculty: slot.facultateName || prev.faculty,
     studyProgram: slot.specializareName || prev.studyProgram,
     year: slot.nrAnStudii != null ? String(slot.nrAnStudii) : prev.year,
-    group: displayGroup(slot.grupaName || fetGroup || slot.idGrupa || prev.group),
+    group,
     subject: slot.materieName || slot.subjectName || prev.subject,
     activityType: kind,
     room: slot.roomName ?? prev.room,

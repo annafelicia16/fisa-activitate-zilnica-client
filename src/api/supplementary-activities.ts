@@ -8,6 +8,7 @@ export interface SupplementaryActivity {
   activityType: string
   observations: string | null
   totalHours: number
+  attachmentCount: number
 }
 
 export interface CreateSupplementaryActivityPayload {
