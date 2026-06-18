@@ -2,14 +2,6 @@ export type ActivityKind = "Curs" | "Seminar" | "Laborator" | "Proiect" | "Other
 
 export const ACTIVITY_KINDS: ActivityKind[] = ["Curs", "Seminar", "Laborator", "Proiect"]
 
-const MULTIPLIERS: Record<ActivityKind, number> = {
-  Curs: 2.0,
-  Seminar: 1.0,
-  Laborator: 1.0,
-  Proiect: 1.0,
-  Other: 1.0,
-}
-
 export function normalizeActivityType(input: string | null | undefined): ActivityKind {
   const value = (input ?? "").trim().toLowerCase()
   if (!value) return "Other"
@@ -20,14 +12,26 @@ export function normalizeActivityType(input: string | null | undefined): Activit
   return "Other"
 }
 
-export function activityMultiplier(input: string | null | undefined): number {
-  return MULTIPLIERS[normalizeActivityType(input)]
+// Conventional-hour multiplier per activity kind. Master & Doctorat weigh more
+// than Licență (the default whenever the cycle is unknown):
+//   Licență:           Curs ×2,   Seminar/Laborator/Proiect ×1
+//   Master / Doctorat: Curs ×2.5, Seminar/Laborator/Proiect ×1.5
+// `cycle` is the AGSIS value ("Bachelor" | "Master" | "Doctorate") or null.
+export function activityMultiplier(
+  input: string | null | undefined,
+  cycle?: string | null,
+): number {
+  const kind = normalizeActivityType(input)
+  const graduate = cycle === "Master" || cycle === "Doctorate"
+  if (kind === "Curs") return graduate ? 2.5 : 2.0
+  return graduate ? 1.5 : 1.0
 }
 
 export function conventionalHours(
   actualHours: number,
   activityType: string | null | undefined,
+  cycle?: string | null,
 ): number {
   if (!Number.isFinite(actualHours) || actualHours < 0) return 0
-  return Math.round(actualHours * activityMultiplier(activityType) * 10) / 10
+  return Math.round(actualHours * activityMultiplier(activityType, cycle) * 10) / 10
 }

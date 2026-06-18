@@ -25,7 +25,7 @@ import { useGroups } from "@/api/groups"
 import { useSubjects } from "@/api/subjects"
 import { useRooms } from "@/api/rooms"
 import { useDebouncedValue } from "@/hooks/use-debounced-value"
-import { ACTIVITY_KINDS, type ActivityKind } from "@/utils/activity"
+import { ACTIVITY_KINDS, conventionalHours, type ActivityKind } from "@/utils/activity"
 import { fmtDateInput } from "@/utils/dates"
 import { foldName } from "@/utils/text"
 import { useTeacherStore } from "@/store/teacher"
@@ -45,7 +45,10 @@ export interface ActivityFormData {
   room: string
   revenue: "NB" | "PO"
   actualHours: string
-  conventionalHours: string
+  // Study cycle of the selected program ("Bachelor" | "Master" | "Doctorate"),
+  // resolved from AGSIS and synced from the cascade. Drives the conventional-hours
+  // multiplier; null when no program is selected / its cycle is unknown.
+  studyCycle: string | null
   observations: string
   // FK back to the scheduled slot this record satisfies (null for ad-hoc).
   // Set when the user fills the form from "Programat", carried through edits,
@@ -116,6 +119,9 @@ interface FormCascade {
   yearSelected: boolean
   groupSelected: boolean
   subjectSelected: boolean
+  // Study cycle of the selected program ("Bachelor" | "Master" | "Doctorate"),
+  // or null when no program is selected / its cycle is unknown.
+  programCycle: string | null
   // Per-level "safe to auto-select a single option" flags: true only when the
   // option list is complete (no search filter) and not refetching, so a
   // transient filtered list can't lock in a value.
@@ -201,6 +207,18 @@ function useFormCascade(
   )
   const programSelected =
     facultySelected && programOptions.some((o) => o.value === state.studyProgram)
+  // Cycle is carried on the specialization record, matched by name to the selected
+  // program. Null until a real program is picked (or its cycle is undetermined).
+  const programCycle = useMemo<string | null>(
+    () => specializations.find((s) => s.name === state.studyProgram)?.cycle ?? null,
+    [specializations, state.studyProgram],
+  )
+  // Mirror the resolved cycle into form state so the saved payload can pick the
+  // right conventional-hours multiplier. studyCycle-only patches don't dirty the
+  // form (see updateForm), so this async resolution won't flag a loaded record.
+  useEffect(() => {
+    if (state.studyCycle !== programCycle) onChange({ studyCycle: programCycle })
+  }, [programCycle, state.studyCycle, onChange])
 
   const { data: studyYears = [], isFetching: yearsFetching } = useStudyYears(
     programSelected ? state.faculty : "",
@@ -273,6 +291,7 @@ function useFormCascade(
     yearSelected,
     groupSelected,
     subjectSelected,
+    programCycle,
     facultyAutoSelect: debFacultySearch === "" && !facultiesFetching,
     // debFaculty must have caught up with state.faculty — right after a faculty
     // change the spec list still belongs to the previous faculty.
@@ -453,17 +472,32 @@ function SubjectRow({
   )
 }
 
+// API cycle ("Bachelor" | "Master" | "Doctorate") → its Romanian pill label and
+// colour. Anything unrecognised (incl. null when no program is selected) renders
+// a neutral gray "None".
+const CYCLE_PILLS: Record<string, { label: string; variant: "approved" | "accent" | "warn" }> = {
+  Bachelor: { label: "Licență", variant: "approved" }, // green
+  Master: { label: "Master", variant: "accent" }, // blue
+  Doctorate: { label: "Doctorat", variant: "warn" }, // red
+}
+
 function HoursRow({
   state,
   onChange,
+  cycle,
 }: {
   state: ActivityFormData
   onChange: ActivityRecordFormProps["onChange"]
+  cycle: string | null
 }) {
+  const pill = cycle ? CYCLE_PILLS[cycle] : undefined
+  // Conventional hours is derived from the effective hours, activity type and
+  // study cycle — shown read-only so it can't drift from the formula.
+  const conv = conventionalHours(parseFloat(state.actualHours) || 0, state.activityType, cycle)
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="flex items-start gap-4">
       <Field label="Ore efective" required>
-        <InputAffix>
+        <InputAffix className="max-w-[100px]">
           <AffixInput
             type="number"
             step="0.5"
@@ -474,17 +508,20 @@ function HoursRow({
           <Affix>h</Affix>
         </InputAffix>
       </Field>
-      <Field label="Ore convenționale" required>
-        <InputAffix>
-          <AffixInput
-            type="number"
-            step="0.5"
-            className="font-mono tnum"
-            value={state.conventionalHours}
-            onChange={(e) => onChange({ conventionalHours: e.target.value })}
-          />
-          <Affix>h conv.</Affix>
-        </InputAffix>
+      <Field label="Ciclu">
+        <div className="flex h-[var(--row-h)] items-center">
+          <Badge variant={pill?.variant ?? "default"}>{pill?.label ?? "None"}</Badge>
+        </div>
+      </Field>
+      <Field label="Ore convenționale">
+        <div className="flex h-[var(--row-h)] items-center overflow-hidden rounded-[--r-md] border border-border bg-surface-2">
+          <span className="px-2.5 font-mono tnum text-[13px] text-text-muted">
+            {conv.toFixed(1)}
+          </span>
+          <span className="flex h-full items-center border-l border-border px-2.5 font-mono text-[11.5px] text-text-muted">
+            h conv.
+          </span>
+        </div>
       </Field>
     </div>
   )
@@ -530,7 +567,7 @@ export function ActivityRecordForm({
         <HeaderRow state={state} onChange={onChange} />
         <FacultyRow state={state} cascade={cascade} />
         <SubjectRow state={state} cascade={cascade} onChange={onChange} />
-        <HoursRow state={state} onChange={onChange} />
+        <HoursRow state={state} onChange={onChange} cycle={cascade.programCycle} />
 
         <Field label="Observații">
           <Textarea

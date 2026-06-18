@@ -36,7 +36,7 @@ export const EMPTY_FORM: ActivityFormData = {
   room: "",
   revenue: "NB",
   actualHours: "",
-  conventionalHours: "",
+  studyCycle: null,
   observations: "",
   activitySlotId: null,
 }
@@ -65,7 +65,9 @@ export function recordToForm(record: DailyActivityRecord): ActivityFormData {
     room: record.roomName,
     revenue: record.revenueType === RevenueType.BaseSalary ? "NB" : "PO",
     actualHours: actual ? actual.toString() : "",
-    conventionalHours: record.conventionalHours.toString(),
+    // Cycle is re-resolved from the program by the form cascade; the conventional
+    // hours preview/payload recompute from it.
+    studyCycle: null,
     observations: record.observations ?? "",
     activitySlotId: record.activitySlotId,
   }
@@ -77,7 +79,6 @@ export function slotToForm(
 ): ActivityFormData {
   const kind = canonicalKind(slot.oldActivityTag || slot.courseTypeTag)
   const duration = slot.duration && slot.duration > 0 ? slot.duration : 1
-  const conv = conventionalHours(duration, kind)
   const time = formatSlotStartTime(slot.hourName) ?? ""
   // Group preference: backend-resolved AGSIS dbo.Grupe.Nume ("8MF141") wins.
   // Slots without one where idGrupa is the whole-class sentinel ("-1"/null)
@@ -101,7 +102,8 @@ export function slotToForm(
     activityType: kind,
     room: slot.roomName ?? prev.room,
     actualHours: duration.toString(),
-    conventionalHours: conv.toString(),
+    // Reset so the cascade re-resolves the cycle for this slot's program.
+    studyCycle: null,
     revenue: slot.plataNB === 1 ? "NB" : slot.plataNB === 0 ? "PO" : prev.revenue,
     activitySlotId: slot.slotId,
   }
@@ -128,7 +130,7 @@ export function formToPayload(
   const start = new Date(startNaive)
   const actualHours = parseFloat(form.actualHours || "0") || 0
   const end = new Date(start.getTime() + actualHours * 60 * 60 * 1000)
-  const conv = parseFloat(form.conventionalHours || "0") || 0
+  const conv = conventionalHours(actualHours, form.activityType, form.studyCycle)
   return {
     externalTeacherId: teacherId,
     departmentName: dept || form.faculty || "",

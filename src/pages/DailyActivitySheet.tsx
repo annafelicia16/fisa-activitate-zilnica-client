@@ -40,7 +40,6 @@ import { useTeacherDaySlotsByDate, type TeacherScheduleSlot } from "@/api/schedu
 import { useDownloadMonthlyActivitySheet } from "@/api/export"
 import { useTeacherStore } from "@/store/teacher"
 import { MONTHS_RO, shiftMonth, ymd } from "@/utils/dates"
-import { conventionalHours } from "@/utils/activity"
 
 export function DailyActivitySheet() {
   const navigate = useNavigate()
@@ -134,15 +133,11 @@ export function DailyActivitySheet() {
   const monthAgg = aggregateMonth(records, calMonth.year, calMonth.month)
 
   function updateForm(patch: Partial<ActivityFormData>) {
-    setForm((prev) => {
-      const next = { ...prev, ...patch }
-      if ("activityType" in patch || "actualHours" in patch) {
-        const hours = parseFloat(next.actualHours || "0") || 0
-        next.conventionalHours = conventionalHours(hours, next.activityType).toString()
-      }
-      return next
-    })
-    setDirty(true)
+    setForm((prev) => ({ ...prev, ...patch }))
+    // studyCycle is system-resolved metadata (synced from the program cascade),
+    // not user input — resolving it must not flag the form as modified.
+    const keys = Object.keys(patch)
+    if (!(keys.length === 1 && keys[0] === "studyCycle")) setDirty(true)
   }
 
   async function pickDate(date: Date) {
@@ -279,6 +274,7 @@ export function DailyActivitySheet() {
       confirmLabel: "Completează",
     })
     if (!confirmed) return
+    setToast("Completarea automată a început. Poate dura un moment…")
     try {
       const result = await autoFillMutation.mutateAsync({
         externalTeacherId,
@@ -409,8 +405,14 @@ export function DailyActivitySheet() {
         />
       </div>
 
-      <Toast open={toast !== null} onClose={() => setToast(null)}>
-        ✓ {toast}
+      <Toast
+        open={toast !== null}
+        onClose={() => setToast(null)}
+        // Keep the "started…" toast up for the whole month fill; the result toast
+        // replaces it as soon as the mutation settles.
+        duration={autoFillMutation.isPending ? 60000 : 2200}
+      >
+        {autoFillMutation.isPending ? "⏳" : "✓"} {toast}
       </Toast>
     </div>
   )

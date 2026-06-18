@@ -5,6 +5,9 @@ export interface Specialization {
   idSpecializare: number
   name: string
   shortName: string | null
+  // Study cycle resolved from AGSIS: "Bachelor" | "Master" | "Doctorate", or null
+  // when it can't be determined. See StudyCycleResolver on the API side.
+  cycle: string | null
 }
 
 const RESOURCE = "/api/v1/Specializations"
